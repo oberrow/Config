@@ -1,0 +1,25 @@
+// Example Configuration file to demonstrate the Config files data being read and re-read
+// The parser will deduce the type and give you the data as a struct
+// As long as there is an equal sign, a value and a variable name it will always work
+// Start ConfigExample.exe and try yourself
+// Change the data in this file when it tells you so you get new data
+// Data types are char, bool, int, double, hex_number (int64_t), string, array<[type], [size]>
+// Keywords are print([var name / string in quotes), printnl (print new line) 
+bool boolean = true
+int integer = 2
+int toInt = hexToInt(0x10)
+double decimal = 10.2239
+hex_number return_value = 0x00
+hex_number toHex = intToHex(10)
+string string = "Hello, World!"
+char ch = 'O'
+array<char, 5> woof = "Hello"
+
+// TODO (Structures are probably impossible using c++):
+// Struct Data
+// {
+// int i
+// char ch
+// string str
+// };
+// print(data.i)
