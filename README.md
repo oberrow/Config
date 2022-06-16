@@ -7,12 +7,13 @@
 5. Make a new Config object by doing Config::Config (var name){(std::ifstream object or any other class with std::istream as a base class)};
 6. Do auto values = (config object).GetDataMap() or auto values = (config object).GetDataVector()
 7. To Reload the Configuration file do if(bool result = (config object).ReloadConfigFile(); result == false) { /\*Error handling or return 1; in the main function\*/ return 1; }
-8. ## Config file syntax
+## Config file syntax
 (type) (var_name (used for data map)) = (value)
 Example:
 int integer = 10;
 if trying to use a hexadecimal number with an int or vice versa use the functions intToHex( (integer) ) or hexToInt( (hexadecimal number) )
 Examples:
+
 int hexToIntTest = hexToInt(0xFF)
 hex_number intToHexTest = intToHex(255)
 Types are
@@ -22,15 +23,22 @@ Types are
 4. double
 5. hex_number (int64_t in c++)
 6. string
+
 Use an array to make multiple variable (more like constants) of the same type
 Array syntax:
 array<type, size> (array name) = { (different values of the same type sepperated by commas and the number of declarations must be equal to the array size) }
 Example:
 array<int, 10> intArray = { 0, 1, 2, 3, 4, 5, 6, 7, 8 ,9 }
-## To print something use
+
+
+To print something use
+
 print( (var name) ) (no need for spaces)
+
 To print a new line there is 2 options
+
 1st. Make a char with the name nl and assign it to '\n' and do print(nl)
+
 2nd. use printnl
 ## TODO:
 1. Add structured data (probably not possible because c++ is staticly typed)
