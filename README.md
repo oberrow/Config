@@ -25,8 +25,11 @@ Types are
 6. string
 
 Use an array to make multiple variable (more like constants) of the same type
+
 Array syntax:
+
 array<type, size> (array name) = { (different values of the same type sepperated by commas and the number of declarations must be equal to the array size) }
+
 Example:
 array<int, 10> intArray = { 0, 1, 2, 3, 4, 5, 6, 7, 8 ,9 }
 
