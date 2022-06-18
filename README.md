@@ -46,3 +46,4 @@ To print a new line there is 2 options
 ## TODO:
 1. Add structured data (probably not possible because c++ is staticly typed)
 2. Add reassigning so variables aren't constants until the next reload
+3. Add operators 
