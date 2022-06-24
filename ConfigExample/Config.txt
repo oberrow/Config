@@ -4,22 +4,49 @@
 // Start ConfigExample.exe and try yourself
 // Change the data in this file when it tells you so you get new data
 // Data types are char, bool, int, double, hex_number (int64_t), string, array<[type], [size]>
-// Keywords are print([var name / string in quotes), printnl (print new line) 
+// Keywords are print([var name / string in quotes), printnl (print new line), println (print line),BREAK (case in-sensitive), TERMINATE_PARSER (case in-sensitive)
+// Pre-Processer keywords are "#use-beta-features" value can be true or false, 
+#use-beta-features true
+void function(int a)
+{
+	string s = toString(a)
+	print(s)
+}
+function(1)
 bool boolean = true
-int integer = 2
+boolean = false
+int integer = 1 + 1
+print(integer)
+println
 int toInt = hexToInt(0x10)
 double decimal = 10.2239
+string toStr = toString(1)
 hex_number return_value = 0x00
 hex_number toHex = intToHex(10)
 string string = "Hello, World!"
 char ch = 'O'
 array<char, 5> woof = "Hello"
-
-// TODO (Structures are probably impossible using c++):
-// Struct Data
+// ---------------------------------------------------------
+// ----------------------- Functions -----------------------
+// How a function declaration would look like:
+// [type] [name]([parameters])
 // {
-// int i
-// char ch
-// string str
-// };
-// print(data.i)
+//	  ...
+// }
+// Example:
+// int Print(string _Str)
+// {
+//		print(_Str)
+// }
+// A function must not be able to access variables from another scope without it being added as a parameter
+// ---------------------------------------------------------
+// Operators
+// ---------------------------------------------------------
+// Arthmetric operators will be : +,-,*,/
+// Assignment operator will be: =
+// No need for other operators
+// Example
+// int integer = 0
+// integer + 1
+// print(integer)
+// ---------------------------------------------------------
