@@ -1,7 +1,7 @@
 #include "log.hpp"
 
-namespace Config {
-	void __cdecl Log::LoglevelInfo(std::string message)
+namespace config {
+	void __cdecl Log::LoglevelInfo(std::string const& message)
 	{
 		colorAttributes color{ GREEN };
 		if (m_level <= 0)
@@ -9,7 +9,7 @@ namespace Config {
 		else
 			return;
 	}
-	void __cdecl Log::LoglevelWarn(std::string message)
+	void __cdecl Log::LoglevelWarn(std::string const& message)
 	{
 		colorAttributes color{ YELLOW };
 		if (m_level <= 1)
@@ -17,11 +17,19 @@ namespace Config {
 		else
 			return;
 	}
-	void __cdecl Log::LoglevelError(std::string message)
+	void __cdecl Log::LoglevelError(std::string const& message)
 	{
 		colorAttributes color{ RED | FOREGROUND_INTENSITY };
 		if (m_level <= 2)
 			std::cerr << "[ERROR] " << message;
+		else
+			return;
+	}
+	void __cdecl Log::LoglevelFatalError(std::string const& message)
+	{
+		colorAttributes color{ FOREGROUND_RED | FOREGROUND_INTENSITY };
+		if (m_level <= 2)
+			std::cerr << "[FATAL_ERROR] " << message;
 		else
 			return;
 	}

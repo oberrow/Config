@@ -18,7 +18,7 @@
 #define YELLOW			14
 #define WHITE			15
 
-namespace Config {
+namespace config {
 	enum colors
 	{
 		black,
