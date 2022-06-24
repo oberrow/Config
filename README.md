@@ -43,6 +43,14 @@ To print a new line there is 2 options
 1st. Make a char with the name nl and assign it to '\n' and do print(nl)
 
 2nd. use printnl
+
+To make a function do
+
+\[function_type\] \[function_name\](\[parameters\])
+{
+  // Function code
+}
+
 ## TODO:
 1. Add structured data (probably not possible because c++ is staticly typed)
 2. Add reassigning so variables aren't constants until the next reload
