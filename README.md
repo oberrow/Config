@@ -53,5 +53,3 @@ To make a function do
 
 ## TODO:
 1. Add structured data (probably not possible because c++ is staticly typed)
-2. Add reassigning so variables aren't constants until the next reload
-3. Add operators 
