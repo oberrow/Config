@@ -1,12 +1,13 @@
 # Config
 ## How To Use
 1. Download the latest version of the static libary and the Config.hpp file from Config/Config.hpp
-2. Link against that in the project you want to use (you need to do this differently for different compilers)
+2. Link against that in the project you want to use (you need to do this differently for different compilers but it might not work on other compilers)
 3. Include the Config.hpp file in your project where ever you want to use it (for me it was #include "../Config/Config.hpp" as shown in the example usage)
 4. In the file you included it in make a new std::ifstream object and open a file with the std::ifstream object
 5. Make a new Config object by doing Config::Config (var name){(std::ifstream object or any other class with std::istream as a base class)};
 6. Do auto values = (config object).GetDataMap() or auto values = (config object).GetDataVector()
 7. To Reload the Configuration file do if(bool result = (config object).ReloadConfigFile(); result == false) { /\*Error handling or return 1; in the main function\*/ return 1; }
+8. Use c++23 or go in change all the .contains() for strings and replace them with .find() != std::string::npos and recompile the static library that easn't a joke when I first made this in cmd-game it was using c++23 and no one else was using the codebase but now it's a library that you might want to use or just wait for c++23
 ## Config file syntax
 (type) (var_name (used for data map)) = (value)
 Example:
