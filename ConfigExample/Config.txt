@@ -5,27 +5,24 @@
 // Change the data in this file when it tells you so you get new data
 // Data types are char, bool, int, double, hex_number (int64_t), string, array<[type], [size]>
 // Keywords are print([var name / string in quotes), printnl (print new line), println (print line),BREAK (case in-sensitive), TERMINATE_PARSER (case in-sensitive)
-// Pre-Processer keywords are "#use-beta-features" value can be true or false, 
+// Pre-Processer keywords are "#use-beta-features" value can be true or false, #use-language-features value can be true or false
 #use-beta-features true
-void function(int a)
+#use-language-features true
+// This doesn't need any main function but if you add one you will need to call it explicitly
+int add(int a, int b)
 {
-	string s = toString(a)
-	print(s)
+	int r = a + b; return r;
 }
-function(1)
-bool boolean = true
-boolean = false
-int integer = 1 + 1
-print(integer)
-println
-int toInt = hexToInt(0x10)
-double decimal = 10.2239
-string toStr = toString(1)
-hex_number return_value = 0x00
-hex_number toHex = intToHex(10)
-string string = "Hello, World!"
-char ch = 'O'
-array<char, 5> woof = "Hello"
+bool boolean = true;
+int integer = 1 + 1;
+int toInt = hexToInt(0x10);
+double decimal = 10.2239;
+string toStr = toString(1);
+hex_number return_value = 0x00;
+hex_number toHex = intToHex(10);
+string string = "Hello, World!";
+char ch = 'O';
+string woof = "Hello";
 // ---------------------------------------------------------
 // ----------------------- Functions -----------------------
 // How a function declaration would look like:
