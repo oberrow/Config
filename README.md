@@ -53,3 +53,4 @@ To make a function do
 
 ## TODO:
 1. Add structured data (probably not possible because c++ is staticly typed)
+2. Fully implement the artmetric operators
