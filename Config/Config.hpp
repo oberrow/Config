@@ -3,14 +3,61 @@
 #include <fstream>
 #include <vector>
 #include <filesystem>
+#include <sstream>
 #include <unordered_map>
 #include <functional>
 #include "log.hpp"
 #include <cstring>
 #include <array>
+#include <map>
+
+// If x == true prints msg and cals __fastfail(exitCode) (int 29h in asm)
+#define FATAL_ASSERT(x, msg, exitCode) if(x)\
+{\
+	std::cout << msg;\
+	__fastfail(exitCode); /*does mov ecx, exitCode and then int 29h*/\
+}
+// If x == true prints msg and cals __debugbreak() (int 3 in asm)
+#define ASSERT(x, msg, run) if(x)\
+{\
+	std::cout << msg;\
+	__debugbreak(); /*does int 3*/\
+	run\
+}
 
 namespace config
 {
+	inline const std::string rickrolllyrics ="\
+		We're no strangers to love\n\
+		You know the rules and so do I\n\
+		A full commitment's what I'm thinking of\n\
+		You wouldn't get this from any other guy\n\
+\n\
+		I just wanna tell you how I'm feeling\n\
+		Gotta make you understand\n\
+\n\
+		Never gonna give you up\n\
+		Never gonna let you down\n\
+		Never gonna run around and desert you\n\
+		Never gonna make you cry\n\
+		Never gonna say goodbye\n\
+		Never gonna tell a lie and hurt you\n\
+		\n\
+		We’ve known each other for so long\n\
+		Your heart's been aching but you're too shy to say it\n\
+		Inside we both know what's been going on\n\
+		We know the game and we're gonna play it\n\
+		\n\
+		And if you ask me how I'm feeling\n\
+		Don't tell me you're too blind to see\n\
+		\n\
+		Never gonna give you up\n\
+		Never gonna let you down\n\
+		Never gonna run around and desert you\n\
+		Never gonna make you cry\n\
+		Never gonna say goodbye\n\
+		Never gonna tell a lie and hurt you\n"
+		;
 	class Config;
 	enum class config_error
 	{
@@ -54,10 +101,18 @@ namespace config
 		TERMINATE_PARSER_WAS_CALLED = 0x10,
 		// CONFIG-0017
 		CANNOT_MODULO_DOUBLE = 0x11,
-		// CONFIG-0018
-		INVALID_PREPROCESSING_DIRECTIVE = 0x12
+		// Fatal Error CONFIG-0018
+		INVALID_PREPROCESSING_DIRECTIVE = 0x12,
+		// CONFIG-0019
+		RETURN_IS_NOT_IN_FUNCTION = 0x13,
+		// CONFIG-0020
+		TOO_MANY_OR_TO_FEW_PARAMETERS_IN_FUNCTION_CALL = 0x14,
+		// Fatal Error CONFIG-0021
+		ISTREAM_OBJECT_IS_CIN = 0x15,
+		// CONFIG-0022
+		INCOMPLETE_TYPE_IS_NOT_ALLOWED = 0x16
 	};
-	std::ostream& operator<<(std::ostream& os, config_error _Other)
+	inline std::ostream& operator<<(std::ostream& os, const config_error& _Other)
 	{
 		using ce = config_error;
 		os << "Details are unknown to the operator<< so specific information is un-avalibable\n";
@@ -80,22 +135,59 @@ namespace config
 		else if (_Other == ce::TERMINATE_PARSER_WAS_CALLED) os << "CONFIG-0016 [FATAL ERROR] Terminate parser was called!";
 		else if (_Other == ce::CANNOT_MODULO_DOUBLE) os << "CONFIG-0017 Cannot modulo a double";
 		else if (_Other == ce::INVALID_PREPROCESSING_DIRECTIVE) os << "CONFIG-0018 [FATAL ERROR] Unrecognized preprocessing directive";
+		else if (_Other == ce::RETURN_IS_NOT_IN_FUNCTION) os << "CONFIG-0019 Return statement is not in function!";
+		else if (_Other == ce::TOO_MANY_OR_TO_FEW_PARAMETERS_IN_FUNCTION_CALL) os << "CONFIG-0020 Too many or too little parameters in function call!";
+		else if (_Other == ce::ISTREAM_OBJECT_IS_CIN) os << "CONFIG-0021 (FATAL ERROR) Inputed std::istream& object == std::cin! Terminating parser!\n";
+		else if (_Other == ce::INCOMPLETE_TYPE_IS_NOT_ALLOWED) os << "CONFIG-0022 Incomplete type is not allowed! Is the type void?\n";
 		return os;
 	}
+	class config_exception
+	{
+	public:
+		const char* what() { return m_ErrorText; }
+		config_exception() = default;
+		config_exception(const char* errMessage, config_error err, int line, bool isHeap) :
+			m_Err{ err }, 
+			m_ErrorText{ errMessage },
+			m_Line{ line },
+			m_IsHeap{ isHeap }
+		{}
+		~config_exception()
+		{
+			if (m_IsHeap) free((void*)m_ErrorText);
+		}
+	private:
+		config_error m_Err = { config_error::OK };
+		const char* m_ErrorText = nullptr;
+		int m_Line{};
+		bool m_IsHeap{};
+	};
 	class LogCover
 	{
+	public:
+		void LogError(std::string msg, config_error err, bool isFatal = false);
+		void LogError(const std::stringstream& msg_sstream, config_error err, bool isFatal = false);
+		void LogError(const std::ostringstream& msg_osstream, config_error err, bool isFatal = false);
+		LogCover(Log l, bool throwExceptionOnError, Config* _Other, int* ele, bool isFunction, int* line) :
+			m_Log{ l },
+			m_ThrowExceptionOnError{ throwExceptionOnError },
+			m_Other{ _Other },
+			m_Ele{ ele },
+			m_IsFunction{ isFunction }, 
+			m_Line{ line } 
+		{}
 	private:
 		Log m_Log{ Log::levelInfoId };
 		Config* m_Other = nullptr;
 		int* m_Ele = nullptr;
-	public:
-		void LogError(const std::string& msg, config_error err, bool isFatal = false);
-		LogCover(Log l, Config* _Other, int* ele) : m_Log{ l }, m_Other{ _Other }, m_Ele{ ele } {}
+		int* m_Line = nullptr;
+		bool m_IsFunction = false;
+		bool m_ThrowExceptionOnError{};
 	};
 	enum class types
 	{
 		// An invalid type
-		invalid_type = -1,
+		invalid_type = -2,
 		// A boolean type
 		basic_boolean = 0,
 		// 1 Character
@@ -107,8 +199,15 @@ namespace config
 		// A hexadecimal number
 		basic_hex = 0x10,
 		// A string type
-		basic_string = sizeof(std::string)
+		basic_string = sizeof(std::string),
+		// No type but needed to check functions return value
+		basic_void = -1
 	};
+	/*struct configStruct
+	{
+		std::vector<std::string> variables;
+		std::string struct_name;
+	};*/
 	struct Store {
 		void Clear()
 		{
@@ -134,9 +233,20 @@ namespace config
 			oss << *this;
 			std::string val = oss.str();
 			std::ranges::reverse(val.begin(), val.end());
-			val.erase('=', std::string::npos);
+			val.erase(val.find('='), std::string::npos);
 			std::ranges::reverse(val.begin(), val.end());
 			return std::make_pair(this->type, val);
+		}
+		static std::string TypeToTypeName(types t)
+		{
+			if (t == types::basic_boolean) return "bool";
+			else if (t == types::basic_character) return "char";
+			else if (t == types::basic_int) return "int";
+			else if (t == types::basic_double) return "double";
+			else if (t == types::basic_hex) return "hex_number";
+			else if (t == types::basic_string) return "string";
+			else if (t == types::basic_void) return "void";
+			else return "invalid_type";
 		}
 		types type = types::invalid_type;
 		std::string scope{};
@@ -155,8 +265,9 @@ namespace config
 		std::vector<double>			decimal_array_Out;
 		std::vector<long long>		hex_array_Out;
 		std::vector<bool>			boolean_array_Out;
-		size_t array_Size = -1;
+		size_t array_Size = static_cast<size_t>(-1);
 		bool is_Array = false;
+		bool didCallToString = false; // Can only be true if object.type == types::basic_string
 		// --------------
 		Store operator+(const Store& st1) const
 		{
@@ -201,7 +312,7 @@ namespace config
 		}
 		friend std::ostream& operator<<(std::ostream& os, const Store& s);
 	};
-	std::ostream& operator<<(std::ostream& os, const Store& s)
+	inline std::ostream& operator<<(std::ostream& os, const Store& s)
 	{
 		if (	 s.type == types::basic_string && !s.str_Out.empty() && !s.is_Array)
 		{
@@ -295,14 +406,17 @@ namespace config
 	}
 	struct Function
 	{
-		std::vector<const char*> actions;
-		std::vector<const char*> parameters;
+		std::vector<std::string> actions;
+		std::vector<std::string> parameters;
+		long long numberOfParameters{};
 		std::string func_type;
 		std::string func_name;
+		int startLine = 0;
 	};
 	class Config
 	{
 	private:
+		int line = 0;
 		std::vector<config_error> error_list;
 		static std::string remove_trailing_whitespaces(std::string& remove)
 		{
@@ -320,7 +434,29 @@ namespace config
 		}
 		size_t element = 0;
 		std::string map_element{};
-		static bool isdigit(char _ch)
+		std::string seperateSemiColonsToNl(std::stringstream& ss)
+		{
+			std::string it{};
+			std::string content{};
+			std::string currentSemicolon{};
+			while (std::getline(ss, content))
+			{
+				if (content.find("//") != std::string::npos) continue;
+				for (int i = 0; i < std::count(content.begin(), content.end(), ';') + 1; i++)
+				{
+					currentSemicolon = content.substr(0, content.find(';'));
+					if (currentSemicolon.find_first_not_of(' ') != 0)
+						currentSemicolon.erase(0, currentSemicolon.find_first_not_of(' '));
+					if (content.find_first_not_of(' ') != 0)
+						content.erase(0, content.find_first_not_of(' '));
+					it.append(currentSemicolon);
+					it.push_back('\n');
+					content.erase(content.find(currentSemicolon), currentSemicolon.length() + 1);
+				}
+			}
+			return it;
+		}
+		bool isdigit(char _ch)
 		{
 			bool not_found = false;
 			std::string num = "0123456789";
@@ -341,13 +477,14 @@ namespace config
 		{
 			return atof(s.c_str()) > 0;
 		}
-		bool isNumber(const std::string& s) const
+		bool isNumber(const std::string& s)
 		{
-			// Replaced so that there are no false positives
+			// Replaced so that it never returns false when it should return true
 			// return std::atoi(s.c_str()) > 0);
+			if (s.empty()) return false;
 			for (auto i : s)
 			{
-				// If the number isn't a valid digit or '-' then return false
+				// If the number isn't a valid digit or '-' or any other operators then return false
 				if (!isdigit(i) && i != '-' && i != '+' && i != '/' && i != '*' && i != '%' && i != ' ') return false;
 				// If it is then it will continue the loop
 				else continue;
@@ -393,9 +530,11 @@ namespace config
 			}
 		}
 		std::vector<Store> data;
+		Store returnValue{}; // Will only not be default initalized when scope != "main" and functionType != "void"
 		std::unordered_map<std::string, Store> data_map;
-		std::unordered_map<std::string, Function> function_map;
+		std::map<std::string, Function> function_map;
 		const static inline int size = 7;
+		bool isStdCin = false; // Hopes the user is a good one and gives an std::ifstream object instead of std::cin
 		const std::array<std::string, size> type_names =
 		{
 			"int",
@@ -442,17 +581,18 @@ namespace config
 		};
 		struct math_error
 		{
-			basic_math_error ec = basic_math_error::OK;
-			config_error cnfg_err = config_error::OK;
-			double result;
+			basic_math_error ec = basic_math_error::OK; // Error state
+			config_error cnfg_err = config_error::OK; // Config error state
+			double result; // Result
 		};
-		types MathGetTypeFromString(std::string str) const
+		types GetTypeFromString(std::string str)
 		{
-			if (isNumber(str)) return types::basic_int;
+			if ((!isNumber(str) && str == "true") || (!isNumber(str) && str == "false")) return types::basic_boolean;
+			else if (isNumber(str)) return types::basic_int;
 			else if (isHexNumber(str)) return types::basic_hex;
 			else if (isDecimalNumber(str)) return types::basic_double;
-			else if (!isNumber(str) && str.contains('\'')) return types::basic_character;
-			else if (isNumber(str)) return types::basic_string;
+			else if (!isNumber(str) && str.find('\'') != std::string::npos) return types::basic_character;
+			else if (!isNumber(str)) return types::basic_string;
 			else return types::invalid_type;
 		}
 		/* Returns the math error status, the result and the config error status 
@@ -462,11 +602,11 @@ namespace config
 		{
 			math_error m_err = { basic_math_error::OK, config_error::OK, 0.00 };
 			Log l{ Log::levelInfoId };
-			LogCover lC{ l, this, &err_element };
+			LogCover lC{ l, throwExceptionOnError, this, &err_element, isFunction, &line };
 			std::string var_one = values.substr(0, values.find(' ') - 1); // First operand
-			if (!data_map.contains(var_one))
+			if (data_map.contains(var_one))
 			{
-				types type = MathGetTypeFromString(values);
+				types type = GetTypeFromString(values);
 				if (type == types::basic_string)
 				{
 					lC.LogError("CONFIG-0014 Type is a string!", config_error::TYPE_IS_A_STRING);
@@ -476,7 +616,7 @@ namespace config
 						0.00
 					};
 				}
-				if (values.contains('+'))
+				if (values.		find('+') != std::string::npos)
 				{
 					std::string operand1 = values.substr(0, values.find('+') - 1);
 					std::string operand2 = values.substr(values.find('+') + 1, std::string::npos);
@@ -505,7 +645,7 @@ namespace config
 						}
 					}
 				}
-				else if (values.contains('-'))
+				else if (values.find('-') != std::string::npos)
 				{
 					std::string operand1 = values.substr(0, values.find('-') - 1); // Variable name to add to
 					std::string operand2 = values.substr(values.find('-') + 1, std::string::npos);
@@ -558,7 +698,7 @@ namespace config
 						}
 					}
 				}
-				else if (values.contains('/'))
+				else if (values.find('/') != std::string::npos)
 				{
 					std::string operand1 = values.substr(0, values.find('-') - 1); // Variable name to add to
 					std::string operand2 = values.substr(values.find('-') + 1, std::string::npos);
@@ -611,7 +751,7 @@ namespace config
 						}
 					}
 				}
-				else if (values.contains('*'))
+				else if (values.find('*') != std::string::npos)
 				{
 					std::string operand1 = values.substr(0, values.find('-') - 1); // Variable name to add to
 					std::string operand2 = values.substr(values.find('-') + 1, std::string::npos);
@@ -664,7 +804,7 @@ namespace config
 						}
 					}
 				}
-				else if (values.contains('%'))
+				else if (values.find('%') != std::string::npos)
 				{
 					std::string operand1 = values.substr(0, values.find('-') - 1); // Variable name to add to
 					std::string operand2 = values.substr(values.find('-') + 1, std::string::npos);
@@ -693,7 +833,7 @@ namespace config
 							}
 				}
 			}
-			else return { basic_math_error::NOTHING_TO_DO, config_error::OK, 0.00 };
+			return { basic_math_error::NOTHING_TO_DO, config_error::OK, 0.00 };
 		}
 		bool isValidType(std::string type)
 		{
@@ -705,37 +845,208 @@ namespace config
 		}
 		constexpr bool isBuiltIn(std::string const& val) const
 		{
-			return val.contains("print") || val.contains("hexToInt") || val.contains("intToHex") || val.contains("toString");
+			return val.find("print") != std::string::npos || val.find("hexToInt") != std::string::npos || val.find("intToHex") != std::string::npos || val.find("toString") != std::string::npos;
 		}
 		constexpr bool isNotBuiltInFunction(std::string const& val) const
 		{
-			return !val.contains("print") && !val.contains("hexToInt") && !val.contains("intToHex") && !val.contains("toString");
+			return val.find("print") == std::string::npos && val.find("hexToInt") == std::string::npos && val.find("intToHex") == std::string::npos && val.find("toString") == std::string::npos;
 		}
-		bool isExperimental{};
-		std::vector<int> function_lines; // Lines that contain function code that should be ignored
-		bool Parse(std::istream const& is, std::string const& scope = "main")
+		constexpr bool isNotBuiltInFunction(std::string const& val, size_t nval) const
 		{
-			error_list.erase(error_list.begin(), error_list.end());
-			function_lines.erase(function_lines.begin(), function_lines.end());
+			size_t print, hexToInt, intToHex, toString;
+			print = val.find("print");
+			hexToInt = val.find("hexToInt");
+			intToHex = val.find("intToHex");
+			toString = val.find("toString");
+			return !(print >= nval) && !(hexToInt >= nval) && !(intToHex >= nval) && !(toString >= nval);
+		}
+		types GetTypeFromTypename(std::string tyName)
+		{
+			if (tyName == "bool")									return types::basic_boolean;
+			else if (tyName == "char")								return types::basic_character;
+			else if (tyName == "int")								return types::basic_int;
+			else if (tyName == "double")							return types::basic_double;
+			else if (tyName == "hex_number")						return types::basic_hex;
+			else if (tyName == "string")							return types::basic_string;
+			else if (tyName == "void")								return types::basic_void;
+			else													return types::invalid_type;
+		}
+		// If you input rickroll it will print the lyrics of never gonna give you up and add a variable called rickroll and fill it with the lyrics
+		// Waste of memory yes waste of time yes funny yes
+		bool canRickRoll = true;
+		bool isExperimental{};
+		bool isLanguage = false; // Use language features? eg. functions, print(), println, printnl etc.
+		bool throwExceptionOnError{};
+		bool isFunction{};
+		/* Lines that contain function / struct (not implemented yet) code that should be ignored used instead of deleting the line from the 
+		   string stream to avoid invalidating iterators
+		*/
+		std::vector<int> ignored_lines; 
+		bool RunFunction(Function& f, std::vector<std::string> passedInParameters, bool& willTerminate, bool& errState, Store& functionReturnValue)
+		{
+			LogCover lC{ Log(Log::levelErrorId), throwExceptionOnError, this, &err_element, isFunction, &line};
+			// Runs a function using the f parameter
+			std::istringstream it;
+			std::string toIt;
+			int index{};
+			bool willExit = false;
+			toIt.append("#use-beta-features true\n");
+			toIt.append("#use-language-features true\n");
+			for (auto& [k, i] : function_map)
+			{
+				std::string declar = i.func_type + ' ' + i.func_name;
+				bool first = true;
+				bool last{};
+				int cIEle{};
+				for (auto& i2 : i.parameters)
+				{
+					last = cIEle == i.numberOfParameters - 1;
+					if(first) declar.push_back('(');
+					if(cIEle != 0) declar.append(", ");
+					declar.append(i2);
+					cIEle++;
+					if (last) cIEle = 0;
+					if (last) declar.append(")\n{\n");
+					first = false;
+				}
+				if (i.numberOfParameters == 0) declar.append("()\n{\n"); // Adds function body so no error happens
+				for (auto& i2 : i.actions)
+				{
+					declar.append(i2);
+					declar.push_back('\n');
+				}
+				declar.append("}\n");
+				toIt.append(declar);
+			}
+			for (auto& i : f.parameters)
+			{
+				std::string v = passedInParameters[index];
+				std::erase(v, ',');
+				remove_trailing_tabs(v);
+				remove_trailing_whitespaces(v);
+				std::string parTyStr = i.substr(0, i.find(' '));
+				std::erase(parTyStr, 32);
+				types parType = GetTypeFromTypename(parTyStr);
+				types passedInParType = GetTypeFromString(v);
+				bool contains = data_map.contains(v);
+				if (parType != passedInParType && !contains)
+				{
+					lC.LogError(std::ostringstream() << "CONFIG-0001 Type " << Store::TypeToTypeName(passedInParType) << " is incompatible with parameter of type " << parTyStr << '\n', config_error::INCOMPATIBLE_TYPES);
+					willExit = true;
+					break;
+				}
+				else if (contains && parType != data_map.at(v).type && v.find("toString") == std::string::npos)
+				{
+					lC.LogError(std::ostringstream() << "CONFIG-0001 Type " << Store::TypeToTypeName(passedInParType) << " is incompatible with parameter of type " << Store::TypeToTypeName(data_map.at(v).type) << '\n', config_error::INCOMPATIBLE_TYPES);
+					willExit = true;
+					break;
+				}
+				if (!data_map.contains(v))
+				{
+					if (passedInParameters[index].find("toString") == std::string::npos)
+					{
+						if(!data_map.contains(passedInParameters[index]))
+							toIt.append(i + " = " + passedInParameters[index] + '\n');
+						else
+							toIt.append(i + " = " + data_map.at(passedInParameters[index]).Get().second + '\n');
+					}
+					else
+					{
+						std::string var_name = passedInParameters[index].substr(passedInParameters[index].find('(') + 1, passedInParameters[index].length() - 1);
+						std::string toStringVarDefinitionNexist = i + " = " + passedInParameters[index];
+						std::string data{};
+						try
+						{
+							data = data_map.at(var_name).Get().second;
+						} catch(std::out_of_range) 
+						{
+							lC.LogError(std::stringstream() << "CONFIG-0010 Could not find " << var_name << " in data map", config_error::COULD_NOT_FIND_IN_DATA_MAP);
+						}
+						std::string toStringVarDefinitionExist = i + " = " + "toString(" + remove_trailing_whitespaces(data) + ")";
+						if(!data_map.contains(var_name))
+							toIt.append(toStringVarDefinitionNexist);
+						else 
+							toIt.append(toStringVarDefinitionExist + '\n');
+					}
+				}
+				else
+				{
+					Store& stRef = data_map.at(v);
+					auto [type, s] = stRef.Get();
+					std::erase(s, ',');
+					if (type != types::basic_string)
+						toIt.append(i + " = " + s + '\n');
+					else
+					{
+						remove_trailing_whitespaces(s);
+						std::string vToString = i + " = toString(" + s + ")\n";
+						if (!stRef.didCallToString)
+							toIt.append(i + " = \"" + s + "\"\n");
+						else
+							toIt.append(vToString);
+					}
+					index++;
+				}
+			}
+			if (willExit) return !willExit;
+			for (auto& i : f.actions)
+			{
+				toIt.append(i);
+				toIt.push_back('\n');
+			}
+			it.str(toIt);
+			types ty = GetTypeFromTypename(f.func_type);
+			Config c{ it, f.func_name, ty }; // internal function scope
+			functionReturnValue = c.returnValue;
+			if (!c.good)
+			{
+				for (auto& i : c.GetErrorList())
+				{
+					if (i == config_error::TERMINATE_PARSER_WAS_CALLED) willTerminate = true;
+				}
+				return false;
+			}
+			return true;
+		}
+		bool Parse(std::istream const& is, bool isIfStatment, std::string const& scope = "main", types this_function_type = types::basic_int)
+		{
+			isFunction = scope != "main";
+			if (!isIfStatment)
+			{
+				error_list.erase(error_list.begin(), error_list.end());
+				ignored_lines.erase(ignored_lines.begin(), ignored_lines.end());
+			}
 			Log l{ Log::levelInfoId };
-			LogCover lC{ l, this, &err_element };
+			LogCover lC{ l, throwExceptionOnError, this, &err_element, isFunction, &line };
 			std::string values;
-			int line = 0;
+			std::stringstream preIt;
 			std::stringstream it;
-			it << is.rdbuf();
+			if (!isStdCin)
+			{
+				preIt << is.rdbuf();
+				it << seperateSemiColonsToNl(preIt);
+			}
+			else it.set_rdbuf(is.rdbuf());
 			while (std::getline(it, values))
 			{
+				if (isStdCin && values == "EOF") break;
 				line++;
+				std::string valuesCpy = values;
+				remove_trailing_whitespaces(valuesCpy);
+				remove_trailing_tabs(valuesCpy);
+				if (!values.empty() && values.front() == '{') continue;
 				bool leave = false;
-				if(isExperimental)
-					for (const auto& i : function_lines)
+				if (isExperimental && !ignored_lines.empty() && !isIfStatment)
+				{
+					for (int i = 0; i < ignored_lines.size() - 1; i++)
 					{
-						if (line == i)
+						if (line == ignored_lines.at(i))
 						{
 							leave = true;
 							break;
 						}
 					}
+				}
 				if (leave) continue;
 				error_list.push_back(config_error::OK);
 				if (values.empty()) continue;
@@ -744,13 +1055,25 @@ namespace config
 				std::string pre_Values{};
 				std::string var_name{};
 				std::string type{};
-				if (values.contains('#') && !values.contains("//"))
+				if (values.find('#') != std::string::npos && values.find("//") == std::string::npos)
 				{
 					// Pre processing
-					if (std::string toChange = values.substr(1, values.find(' ') - 1); toChange == "use-beta-features")
+					std::string toChange = values.substr(1, values.find(' ') - 1);
+					if (toChange == "use-beta-features")
 					{
 						std::string opt = values.substr(values.find(' ') + 1);
 						std::istringstream(opt) >> std::boolalpha >> isExperimental;
+						throwExceptionOnError = throwExceptionOnError && isExperimental;
+					}
+					else if (toChange == "use-language-features")
+					{
+						std::string opt = values.substr(values.find(' ') + 1);
+						std::istringstream(opt) >> std::boolalpha >> isLanguage;
+					}
+					else if (toChange == "can-rick-roll")
+					{
+						std::string opt = values.substr(values.find(' ') + 1);
+						std::istringstream(opt) >> std::boolalpha >> canRickRoll;
 					}
 					else 
 					{ 
@@ -762,8 +1085,9 @@ namespace config
 					}
 					continue;
 				}
-				if (!values.contains("//"))
+				if (values.find("//") == std::string::npos)
 				{
+					if (values.find("print") != std::string::npos && !isLanguage) continue; // ignore line
 					remove_trailing_whitespaces(values);
 					remove_trailing_tabs(values);
 					if (_stricmp(values.c_str(), "BREAK") == 0)
@@ -773,15 +1097,38 @@ namespace config
 					}
 					else if (_stricmp(values.c_str(), "TERMINATE_PARSER") == 0) 
 					{
-						lC.LogError((std::ostringstream() << "CONFIG-0016 at line " << line << " TERMINATE_PARSER was called!\n").str(), config_error::TERMINATE_PARSER_WAS_CALLED, true);
-						__debugbreak();
+						if (!isFunction)
+						{
+							lC.LogError((std::ostringstream() << "CONFIG-0016 at line " << line << " TERMINATE_PARSER was called!\n").str(), config_error::TERMINATE_PARSER_WAS_CALLED, true);
+							__debugbreak();
+						}
+						else
+						{
+							error_list[err_element] = config_error::TERMINATE_PARSER_WAS_CALLED;
+							good = false;
+						}
 						return false;
 					}
-					if (values.contains('(') && isNotBuiltInFunction(values) && isExperimental)
+					else if (values == "rickroll" && canRickRoll)
+					{
+						std::cout <<
+							"You asked for this:\n"
+							<< rickrolllyrics;
+						ShellExecute(0, 0, L"https://www.youtube.com/watch?v=dQw4w9WgXcQ", 0, 0, SW_MINIMIZE);
+						Store var = {};
+						var.str_Out = rickrolllyrics;
+						var.type = types::basic_string;
+						var.var_name = "rick_roll";
+						data_map.try_emplace("rick_roll", var);
+						data.push_back(var);
+						continue;
+					}
+					if (values.find('(') != std::string::npos && isNotBuiltInFunction(values) && isExperimental && values.find("if") == std::string::npos && isLanguage)
 					{
 						Function f = {};
+						f.startLine = line;
 						std::string func_type = values.substr(0, values.find_first_of(' '));
-						if (!isValidType(func_type)) continue;
+						if (!isValidType(func_type)) goto runFunc;
 						std::string function_name = values.substr(values.find_first_of(' '), values.find('(') - 1);
 						std::string parameters = values.substr(values.find('('), std::string::npos);
 						function_name.erase(function_name.find('('), std::string::npos);
@@ -793,12 +1140,17 @@ namespace config
 						f.func_type = func_type;
 					    auto pre = std::count(parameters.begin(), parameters.end(), ',');
 					    auto numberOfParameters = (!parameters.empty()) ? pre + 1 : pre;
+						f.numberOfParameters = numberOfParameters;
 						for (int i = 0; i < numberOfParameters; i++)
 						{
-							std::string par = parameters.substr(0, parameters.find(','));
-							parameters.erase(0, par.length());
+							std::string par;
+							par = parameters.substr(0, parameters.find(',')); 
+							//if(i != 0) par.erase(par.find(','), std::string::npos);
+							parameters.erase(0, par.length() + 1);
+							if (par.front() == 32) remove_trailing_whitespaces(par);
 							std::erase(par, ',');
-							f.parameters.push_back(par.c_str());
+							const char* parCstr = par.c_str();
+							f.parameters.push_back(parCstr);
 						}
 						std::string contents = it.str();
 						std::string extracted = contents.substr(contents.find(values), std::string::npos);
@@ -807,17 +1159,17 @@ namespace config
 						int index{ 1 };
 						while (std::getline(ss, action))
 						{
-							function_lines.push_back(line + index);
+							ignored_lines.push_back(line + index);
 							index++;
-							if (action.contains(values)) 
+							if (action.find(values) != std::string::npos)
 							{
 								continue;
 							}
-							if (action.contains('{')) 
+							if (action.find('{') != std::string::npos) 
 							{
 								continue;
 							}
-							if (action.contains('}')) 
+							if (action.find('}') != std::string::npos) 
 							{
 								break;
 							}
@@ -830,15 +1182,92 @@ namespace config
 						}
 						function_map.try_emplace(function_name, f);
 						continue;
-
 					}
-					if (values.contains('='))
+				runFunc:
+					if (values.find("return") != std::string::npos && isFunction && isLanguage)
+					{
+						if (scope == "main")
+						{
+							lC.LogError("CONFIG-0019 Return statement is not in a function!", config_error::RETURN_IS_NOT_IN_FUNCTION);
+						}
+						if (this_function_type == types::basic_void) break;
+						std::string operand1 = values.substr(values.find_first_of('n') + 2, std::string::npos);
+						types type = GetTypeFromString(operand1);
+						if (type != this_function_type)
+						{
+							lC.LogError(std::ostringstream() << "CONFIG-0001 'return' Type " << Store::TypeToTypeName(type) << " is incompatible with type " << Store::TypeToTypeName(this_function_type), config_error::INCOMPATIBLE_TYPES);
+							continue;
+						}
+						if (type == types::basic_boolean)
+						{
+							returnValue.type = types::basic_boolean;
+							returnValue.boolean_Out = operand1.find("true") != std::string::npos;
+						}
+						else if (type == types::basic_character)
+						{
+							returnValue.type = types::basic_character;
+							char ch = operand1[1];
+							if (ch == '\\')
+							{
+								if		(operand1[2] == '\'') ch = '\'';
+								else if (operand1[2] == '\"') ch = '\"';
+								else if (operand1[2] == '?') ch = '\?';
+								else if (operand1[2] == 'a') ch = '\a';
+								else if (operand1[2] == 'b') ch = '\b';
+								else if (operand1[2] == 'f') ch = '\f';
+								else if (operand1[2] == 'n') ch = '\n';
+								else if (operand1[2] == 'r') ch = '\r';
+								else if (operand1[2] == 't') ch = '\t';
+								else if (operand1[2] == 'v') ch = '\v';
+								else if (operand1[2] == '0') ch = '\0';
+							}
+							returnValue.character_Out = ch;
+						}
+						else if (type == types::basic_int)
+						{
+							returnValue.type = types::basic_int;
+							returnValue.int_Out = std::atoi(operand1.c_str());
+						}
+						else if (type == types::basic_double)
+						{
+							returnValue.type = types::basic_double;
+							returnValue.decimal_Out = std::atof(operand1.c_str());
+						}
+						else if (type == types::basic_hex)
+						{
+							returnValue.type = types::basic_hex;
+							std::istringstream(operand1) >> std::hex >> returnValue.int_Out;
+						}
+						else if (type == types::basic_string)
+						{
+							size_t count = std::ranges::count(pre_Values.begin(), pre_Values.end(), '\"');
+							if (count > 2)
+							{
+								lC.LogError("CONFIG-0009 Too much \"s in string!", config_error::TOO_MUCH_OR_TO_LITTLE_QUOTATION_MARKS_IN_STRING_DECLARATION);
+								continue;
+							}
+							else if (count < 2)
+							{
+								lC.LogError("CONFIG-0009 Too little \"s in string!", config_error::TOO_MUCH_OR_TO_LITTLE_QUOTATION_MARKS_IN_STRING_DECLARATION);
+								continue;
+							}
+							std::string pre_str_val = operand1.substr(operand1.find_first_of('\"'));
+							std::string str_Val;
+							for (auto& i : pre_str_val)
+							{
+								if (i == '\"') break;
+								else str_Val.push_back(i);
+							}
+						}
+						break;
+					}
+					if (values.find('=') != std::string::npos)
 					{
 						bool isReAssign = false;
 						std::string operand1{ values.substr(0, values.find('=') - 1) }, operand2{ values.substr(values.find('='),std::string::npos) };
 						// If the first word != a type name then it is a variable declaration instead of a reassgining operation
 						std::string word1 = operand1.substr(0, values.find(' '));
-						if (operand1.contains("array")) goto nReAssign; // If it is an array it will try to reference the array because "array" isn't a type name
+						if (operand1.find("array") != std::string::npos || operand1.find("if") != std::string::npos) goto nReAssign; // If it is an array or an if statment it will try to reference the array because "array" and "if([statment])" isn't a type name
 						for (int i = 0; i < size; i++)
 						{
 							if (word1 == type_names[i]) break;
@@ -926,7 +1355,7 @@ namespace config
 							data[i]			  .decimal_Out = std::atof(pre_Values.c_str());
 							data_map[operand1].decimal_Out = std::atof(pre_Values.c_str());
 						}
-						else if (!isNumber(pre_Values) && pre_Values.contains('\''))
+						else if (!isNumber(pre_Values) && pre_Values.find('\'') != std::string::npos)
 						{
 							types isInt = types::basic_character;
 							if (type == "int")
@@ -977,43 +1406,43 @@ namespace config
 							}
 							std::erase(pre_Values, '\"');
 							remove_trailing_whitespaces(pre_Values);
-							data[i].type = types::basic_string;
+							data[(i == data.size()) ? i - 1 : i ].type = types::basic_string;
 							data_map[var_name].str_Out = pre_Values;
 						}
 						continue;
 					}
 					nReAssign:
-					if (size_t nval = values.find("="); nval != std::string::npos && !values.contains("print") && !values.contains("printnl"))
+					if (size_t nval = values.find("="); nval != std::string::npos && values.find("print") == std::string::npos && values.find("printnl") == std::string::npos)
 					{
 						pre_Values = values.substr(nval + 2);
-						if (!values.contains("array"))
+						if (values.find("array") == std::string::npos)
 							var_name = values.substr(values.find(' ') + 1, nval - 2);
 						else
 							var_name = values.substr(values.find(' ') + 4, nval - 15); 
-						if (var_name.contains("="))
+						if (var_name.find("=") != std::string::npos)
 							var_name.erase(var_name.find('='), std::string::npos);
 					}
 					std::erase(var_name, 32);
 					map_element = var_name;
 					
-					if (values.find(' ') + 1 != std::string::npos && !values.contains("print") && !values.contains("printnl"))
+					if (values.find(' ') + 1 != std::string::npos && values.find("print") == std::string::npos && values.find("printnl") == std::string::npos)
 					{
-						if (!values.contains("array"))
+						if (values.find("array") == std::string::npos)
 							type = values.substr(0, values.find(' '));
 						else type = values.substr(0, values.find('>') + 1);
 					}
-					if (values.contains("print")) pre_Values = values;
-					else if (values.contains("printnl")) pre_Values = values;
-					if (type.contains("array") && type.contains(','))
+					if (values.find("print") != std::string::npos) pre_Values = values;
+					else if (values.find("printnl") != std::string::npos) pre_Values = values;
+					if (type.find("array") != std::string::npos && type.find(',') != std::string::npos)
 					{
 						isArray = true;
 						std::string cpy = type;
-						if (type.contains("double")) type = "double";
-						else if (type.contains("char")) type = "char";
-						else if (type.contains("bool")) type = "bool";
-						else if (type.contains("int")) type = "int";
-						else if (type.contains("hex_number")) type = "hex_number";
-						else if (type.contains("string")) type = "string";
+						if (type.	  find("double") != std::string::npos) type = "double";
+						else if (type.find("char") != std::string::npos) type = "char";
+						else if (type.find("bool") != std::string::npos) type = "bool";
+						else if (type.find("int") != std::string::npos) type = "int";
+						else if (type.find("hex_number") != std::string::npos) type = "hex_number";
+						else if (type.find("string") != std::string::npos) type = "string";
 						std::string num = "\0";
 						for (auto i : cpy)
 						{
@@ -1031,12 +1460,19 @@ namespace config
 							continue;
 						}
 					}
-					if (!values.contains("print"))
+					if (values.find("print") == std::string::npos && values.find("return") == std::string::npos) // Type checking
 					{
+						bool eState = false;
 						for (int i = 0; i < size; i++)
 						{
+							if (type == "void")
+							{
+								lC.LogError(std::ostringstream() << "CONFIG-0022 Incomplete type" << type << "is not allowed! Line : " << line, config_error::INCOMPLETE_TYPE_IS_NOT_ALLOWED);
+								eState = true;
+								break;
+							}
 							if (type == type_names[i]) { break; }
-							else if (type != type_names[i] && i == size - 1 && !type.contains('}'))
+							else if (type != type_names[i] && i == size - 1 && type.find('}') == std::string::npos && type.find('(') == std::string::npos)
 							{
 								lC.LogError((std::stringstream() << "CONFIG-0000 Un-recognized type! Type is " << type << "\n").str(),
 									config_error::TYPE_UNRECOGNIZED);
@@ -1047,15 +1483,17 @@ namespace config
 								lC.LogError(
 									(std::ostringstream() << "CONFIG-0012 Variable name cannot be a type name! Type is " << type).str(),
 									config_error::VAR_NAME_IS_A_TYPE_NAME);
-								continue;
+								eState = true;
+								break;
 							}
 						}
+						if (eState) continue;
 					}
 					if (!pre_Values.empty())
 						;
 					else
 					{
-						if (!values.contains('{') && !values.contains('}'))
+						if (values.find('{') == std::string::npos && values.find('}') == std::string::npos && values.find('(') == std::string::npos && values.find("return") == std::string::npos)
 						{
 							lC.LogError(
 								(std::stringstream() << "\nCONFIG-0004 Missing an \"=\" sign in provided std::istream& object! Line is " << line).str(),
@@ -1063,10 +1501,19 @@ namespace config
 							);
 							continue;
 						}
-						else continue; // in a function declaration
+						else if(values.find('(') == std::string::npos) continue; // in a function declaration
 					}
-					if (!values.contains("print"))
+					if (values.find("print") == std::string::npos)
 					{
+						size_t paren = values.find('(');
+						if (paren != std::string::npos)
+						{
+							std::string valCpy = values;
+							remove_trailing_whitespaces(values);
+							remove_trailing_tabs(values);
+							std::string fname = valCpy.substr(0, paren);
+							if (isNotBuiltInFunction(fname)) goto func;
+						}
 						Store toVec = { };
 						data.push_back(toVec);
 						std::erase(var_name, 32);
@@ -1078,12 +1525,73 @@ namespace config
 						data_map[var_name].scope = scope;
 						SetType(type);
 					}
+					func:
+					if (values.find("if") != std::string::npos)
+					{
+						ignored_lines.push_back(line);
+						std::string operand1 = values.substr(values.find('(') + 1);
+						std::string operand2 = values.substr(values.find('(') + 1);
+						std::erase(operand1, ')');
+						std::erase(operand2, ')');
+						size_t _Operator = values.find('=');
+						size_t _Operator2 = values.rfind('=');
+						if (_Operator == std::string::npos) continue;
+						operand1.erase(_Operator - 3, std::string::npos);
+						std::reverse(operand2.begin(), operand2.end());
+						operand2.erase(4 + _Operator2 / 5, std::string::npos);
+						std::reverse(operand2.begin(), operand2.end());
+						if(operand2.find('=') != std::string::npos) operand2.erase(operand2.find('='), 1 + std::count(operand2.begin(), operand2.end(), '=') - 1);
+						std::erase(operand1, ' ');
+						std::erase(operand2, ' ');
+						
+						Store st;
+						try
+						{
+							if (GetTypeFromString(operand1) != types::basic_boolean)
+							{
+								st = data_map.at(operand1);
+							}
+							else
+							{
+								st.type = types::basic_boolean;
+								st.var_name = "temp";
+								st.boolean_Out = operand1.find("true") != std::string::npos;	 
+							}
+						}
+						catch (std::out_of_range)
+						{
+							lC.LogError(std::ostringstream() << "CONFIG-0010 Could not find " << operand1 << " in data map!", config_error::COULD_NOT_FIND_IN_DATA_MAP);
+							continue;
+						}
+						std::string val = st.Get().second;
+						remove_trailing_whitespaces(val);
+						if (val == operand2)
+						{
+							std::string contents = it.str();
+							std::string extracted = contents.substr(contents.find(values));
+							std::stringstream ss{ extracted };
+							std::stringstream toRun;
+							std::string action;
+							int index{ 1 };
+							while (getline(ss, action))
+							{
+								ignored_lines.push_back(line + index);
+								index++;
+								if (action.find(values) != std::string::npos) continue;
+								else if (action.find('{') != std::string::npos) { continue; }
+								else if (action.find('}') != std::string::npos) break;
+								toRun.str(toRun.str() + action + "\n");
+ 							}
+							Parse(toRun, true);
+						}
+						continue;
+					}
 					if (!pre_Values.empty() && pre_Values.front() == 32)
 					{
 						pre_Values.erase(0, 1);
 					}
 					pre_Values.append("\0");
-					if (!isArray && type == "string" && !pre_Values.contains("toString"))
+					if (!isArray && type == "string" && pre_Values.find("toString") == std::string::npos)
 					{
 						size_t count = std::ranges::count(pre_Values.begin(), pre_Values.end(), '\"');
 						if (count > 2)
@@ -1098,7 +1606,7 @@ namespace config
 
 						}
 					}
-					if (isArray && type == "char" && pre_Values.contains('\"'))
+					if (isArray && type == "char" && pre_Values.find('\"') != std::string::npos)
 					{
 						l.LoglevelWarn("CONFIG-0015 Do not use a char array as a string! Use the string type instead");
 						size_t count = std::ranges::count(pre_Values.begin(), pre_Values.end(), '\"');
@@ -1254,7 +1762,7 @@ namespace config
 									break;
 								}
 								std::string ch_Str;
-								ch_Str = arr_Values.substr(arr_Values.find('\''), (!arr_Values.contains('\\')) ? 2 : 3);
+								ch_Str = arr_Values.substr(arr_Values.find('\''), (!(arr_Values.find('\\') != std::string::npos)) ? 2 : 3);
 								char ch = ch_Str[1];
 								if (ch == '\\')
 								{
@@ -1363,20 +1871,72 @@ namespace config
 						}
 						continue;
 					}
-					else if (values.contains('(') && isNotBuiltInFunction(values) && isExperimental /*uses experimental features?*/)
+					else if (values.find('(') != std::string::npos && function_map.contains(values.substr(0, values.find('('))) && isExperimental && isLanguage)
 					{
-						std::string function_name = values.substr(0, values.find('(') - 2);
-						Function& func = function_map.at(function_name);
-						std::istringstream iss{};
-						std::string toIss;
-						for (auto& i : func.actions)
+						std::string function_name = values.substr(0, values.find('('));
+						std::string par = values.substr(values.find('(') + 1, values.find(')') - 1);
+						std::erase(par, ')');
+						std::vector<std::string> pars;
+						Function func;
+						try
 						{
-							toIss.append(i);
+							func = function_map.at(function_name);
+						} 
+						catch(std::out_of_range) 
+						{
+							lC.LogError("CONFIG-0010 Could not find function in function map", config_error::COULD_NOT_FIND_IN_DATA_MAP);
+							continue;
 						}
-						iss.str(toIss);
-						Parse(iss, func.func_name);
+						bool errorState = false;
+						auto count = std::count(par.begin(), par.end(), ',') + 1;
+						if (count > func.numberOfParameters && func.numberOfParameters != 0)
+						{
+							lC.LogError("CONFIG-0020 Too many parameters in function call!", config_error::TOO_MANY_OR_TO_FEW_PARAMETERS_IN_FUNCTION_CALL, false);
+							errorState = true;
+							continue;
+						}
+						else if (count < func.numberOfParameters)
+						{
+							lC.LogError("CONFIG-0020 Too few parameters in function call!", config_error::TOO_MANY_OR_TO_FEW_PARAMETERS_IN_FUNCTION_CALL, false);
+							errorState = true;
+							continue;
+						}
+						for (int i = 0; i < func.numberOfParameters; i++)
+						{
+							if (func.numberOfParameters == 1)
+							{
+								pars.push_back(par);
+							}
+							else
+							{
+								std::string thisPar = par.substr(i != func.numberOfParameters - 1 ? i : i - 1, par.find(','));
+								par.erase(par.find(thisPar), thisPar.length() + 1);
+								pars.push_back(thisPar);
+							}
+						}
+						if (errorState) continue;
+						bool willTerminate{};
+						bool errState{};
+						Store st{};
+						RunFunction(func, pars, willTerminate, errState, st);
+						if (willTerminate)
+						{
+							int lnTerm = 1;
+							for (auto& i : func.actions)
+							{
+								lnTerm++;
+								const char* ln = i.c_str();
+								if (_stricmp(ln, "TERMINATE_PARSER") == 0) break;
+								else continue;
+							}
+							lC.LogError(std::ostringstream() << "CONFIG-0016 TERMINATE_PARSER was called at line " << lnTerm + func.startLine << " in function " << func.func_name << " called from function " << scope << '\n', config_error::TERMINATE_PARSER_WAS_CALLED, true);
+							__debugbreak();
+							return false;
+						}
+						if (errState) continue;
+						continue;
 					}
-					else if (!isNumber(pre_Values) && pre_Values.contains("print") && pre_Values != "printnl" && pre_Values != "println")
+					else if (!isNumber(pre_Values) && pre_Values.find("print") != std::string::npos && pre_Values != "printnl" && pre_Values != "println" && isLanguage )
 					{
 						std::string vname =
 							pre_Values.substr(
@@ -1385,7 +1945,7 @@ namespace config
 							);
 						vname.erase(vname.find('('), 1);
 						vname.erase(vname.find(')'), 1);
-						if (!vname.contains('"'))
+						if (vname.find('"') == std::string::npos)
 						{
 							Store i{};
 							if(data_map.contains(vname))
@@ -1409,40 +1969,62 @@ namespace config
 						}
 						else
 						{
-							printf_s(vname.substr(vname.find('\"') + 1, vname.rfind('\"') - 1).c_str());
+							// Easter egg that's also kinda a troll
+							if (vname == "\"Your mom\"") vname = "\"Your mom is fat\"";
+							printf_s("%s", vname.substr(vname.find('\"') + 1, vname.rfind('\"') - 1).c_str());
 						}
 					}
-					else if (!isNumber(pre_Values) && (pre_Values == "printnl" || pre_Values == "println")) printf_s("\n");
-					else if (!isNumber(pre_Values) && pre_Values.contains("toString"))
+					else if (!isNumber(pre_Values) && (pre_Values == "printnl" || pre_Values == "println") && isLanguage) printf_s("\n");
+					else if (!isNumber(pre_Values) && pre_Values.find("toString") != std::string::npos)
 					{
-						std::string num = pre_Values.substr(pre_Values.find('(') + 1, pre_Values.length());
-						std::erase(num, ')');
+					std::string num = pre_Values.substr(pre_Values.find('(') + 1, pre_Values.length());
+					std::erase(num, ')');
+					if (!data_map.contains(num))
+					{
+						remove_trailing_tabs(num);
+						remove_trailing_whitespaces(num);
 						data[element].type = types::basic_string;
-						data_map[var_name].type = types::basic_string;
+						data_map.at(var_name).type = types::basic_string;
 						data[element].str_Out = num;
-						data_map[var_name].str_Out = num;
+						data_map.at(var_name).str_Out = num;
+						data[element].didCallToString = true;
+						data_map.at(var_name).didCallToString = true;
 					}
-					else if (!isNumber(pre_Values) && pre_Values.contains("intToHex"))
+					else
 					{
-						if(type != "hex_number") { 
-							lC.LogError(
-								"CONFIG-0001 Type 'hex_number' is in-compatible with declaration of type '" + type + "' terminating parsing of current line! Hint : try changing the type to hex_number\n",
-								config_error::INCOMPATIBLE_TYPES
-							);
-							continue;
-						}
-						auto number = static_cast<int64_t>(std::atoi(
-							pre_Values.substr(
-								static_cast<int64_t>(pre_Values.find('(')) + 1,
-								static_cast<int64_t>(pre_Values.find(')')) - 1).c_str()));
+						Store& s = data_map.at(num);
+						auto [t, d] = s.Get(); // Gets value as a string
+						remove_trailing_tabs(d);
+						remove_trailing_whitespaces(d);
+						data[element].str_Out = d;
+						data_map.at(var_name).str_Out = d;
+						data[element].didCallToString = true;
+						data_map.at(var_name).didCallToString = true;
+					}
+					}
+					else if (!isNumber(pre_Values) && pre_Values.find("intToHex") != std::string::npos)
+					{
+					if (type != "hex_number") {
+						lC.LogError(
+							"CONFIG-0001 Type 'hex_number' is in-compatible with declaration of type '" + type + "' terminating parsing of current line! Hint : try changing the type to hex_number\n",
+							config_error::INCOMPATIBLE_TYPES
+						);
+						continue;
+					}
+					std::string strNum =
+						pre_Values.substr(
+							static_cast<int64_t>(pre_Values.find('(')) + 1,
+							static_cast<int64_t>(pre_Values.find(')')));
+					if (strNum[strNum.length() - 1] == ')') strNum.erase(strNum.length() - 1, 1);
+					auto number = static_cast<int64_t>(std::atoi(strNum.c_str()));
 
-						data[element].type = types::basic_hex;
-						data[element].hex_Out = number;
-						data_map[var_name].type = types::basic_hex;
-						data_map[var_name].hex_Out = number;
+					data[element].type = types::basic_hex;
+					data[element].hex_Out = number;
+					data_map[var_name].type = types::basic_hex;
+					data_map[var_name].hex_Out = number;
 
 					}
-					else if (!isNumber(pre_Values) && pre_Values.contains("hexToInt"))
+					else if (!isNumber(pre_Values) && pre_Values.find("hexToInt") != std::string::npos)
 					{
 						if(type != "int") 
 						{ 
@@ -1507,7 +2089,7 @@ namespace config
 							continue;
 						}
 						auto [err, cnfg_err, res] = DoMath(pre_Values);
-						if (err != basic_math_error::NOTHING_TO_DO && cnfg_err == config_error::OK)
+						if (err == basic_math_error::NOTHING_TO_DO && cnfg_err == config_error::OK)
 						{
 							int64_t temp = 0;
 							std::istringstream iss{ pre_Values };
@@ -1598,7 +2180,7 @@ namespace config
 						}
 						
 					}
-					else if (!isNumber(pre_Values) && pre_Values.contains('\''))
+					else if (!isNumber(pre_Values) && pre_Values.find('\'') != std::string::npos)
 					{
 						types isInt = types::basic_character;
 						if (type == "int")
@@ -1672,26 +2254,39 @@ namespace config
 			return good;
 		}
 	public:
-		const std::vector<config_error>& GetErrorList() { return error_list; }
-		const config_error GetLastError() { return error_list[err_element]; }
+		const std::vector<config_error>& GetErrorList() const { return error_list; }
+		const config_error& GetLastError() { return error_list.at(err_element); }
 		const std::vector<Store>& GetDataVector() const { return data; }
 		const std::unordered_map<std::string, Store>& GetDataMap() const { return data_map; }
-		explicit Config(std::istream& inStream)
+		Config() = delete;
+		Config(std::istream& inStream, const std::string& scope = "main", types function_type = types::basic_int)
+			:isFunction{ scope != "main" }, throwExceptionOnError(false)
 		{
-			Parse(inStream);
+			//ASSERT(inStream.rdbuf() == std::cin.rdbuf(), "\a[FATAL_ERROR] CONFIG-0021 inStream.rdbuf() == std::cin.rdbuf()",
+			//error_list.push_back(config_error::ISTREAM_OBJECT_IS_CIN); 
+			//good = false;
+			//return;);
+			isStdCin = inStream.rdbuf() == std::cin.rdbuf();
+			Parse(inStream, false, scope, function_type);
 		}
-		_Must_inspect_result_ _Check_return_ [[nodiscard]] bool ReloadConfigFile(std::istream& is)
+		_Must_inspect_result_ [[nodiscard]] bool ReloadConfigFile(std::istream& is, bool throwExceptionOnError, const std::string& scope = "main", types function_type = types::basic_int)
 		{
+			/*ASSERT(is.rdbuf() == std::cin.rdbuf(), "\a[FATAL_ERROR] CONFIG-0021 is.rdbuf() == std::cin.rdbuf()",
+				error_list.push_back(config_error::ISTREAM_OBJECT_IS_CIN);
+			good = false;
+			return false;);*/
+			isStdCin = is.rdbuf() == std::cin.rdbuf();
 			// Removed erasing the error vector because it will automatically do it in Parse()
 			err_element	= 0;
 			element		= 0;
+			line		= 0;
 			for (auto& i : data)
 			{
 				i.Clear();
 			}
 			data.clear();
 			data_map.clear();
-			return Parse(is);
+			return Parse(is, false, "main", types::basic_int);
 		}
 		Config(const Config&) = delete;
 		Config& operator=(const Config&) = delete;
@@ -1699,13 +2294,34 @@ namespace config
 		Config& operator=(Config&&) = delete;
 		friend class LogCover;
 	};
-	void LogCover::LogError(const std::string& msg, config_error err, bool isFatal)
+	inline void LogCover::LogError(std::string msg_str, config_error err, bool isFatal)
 	{
+		std::string msg = msg_str;
+		if (msg.find("Line") == std::string::npos && !m_IsFunction) msg.append(std::string(" Line : ") + std::to_string(*this->m_Line));
+		if(msg[msg.length() - 1] != '\n') msg.push_back('\n');
 		if (!isFatal)
 			m_Log.LoglevelError(msg);
 		else m_Log.LoglevelFatalError(msg);
 		m_Other->error_list[*m_Ele] = err;
 		m_Other->good = false;
+		if (m_ThrowExceptionOnError)
+		{
+			config_exception cExc = { (const char*)calloc(msg.length() + 2, sizeof(char)), err, *m_Line, true };
+			memcpy((void*)cExc.what(), msg.c_str(), msg.length() + 2);
+			throw cExc;
+		}
+		// Continue or return if fatal Statement has to be in the if statement along with this function
+	}
+	inline void LogCover::LogError(const std::stringstream& msg_sstream, config_error err, bool isFatal)
+	{
+		std::string msg = msg_sstream.str();
+		LogError(msg, err, isFatal);
+		// Continue or return if fatal Statement has to be in the if statement along with this function
+	}
+	inline void LogCover::LogError(const std::ostringstream& msg_osstream, config_error err, bool isFatal)
+	{
+		std::string msg = msg_osstream.str();			
+		LogError(msg, err, isFatal);
 		// Continue or return if fatal Statement has to be in the if statement along with this function
 	}
 }
