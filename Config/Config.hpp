@@ -864,9 +864,10 @@ namespace config
 			std::string toIt;
 			int index{};
 			bool willExit = false;
-			std::string options = "use-beta-features " + std::to_string(this->isExperimental);
+			std::string is_beta = isExperimental ? "true" : "false";
+			std::string options = "#use-beta-features " + is_beta;
 			toIt.append(options);
-			toIt.append("#use-language-features true\n");
+			toIt.append("\n#use-language-features true\n");
 			for (auto& [k, i] : function_map)
 			{
 				std::string declar = i.func_type + ' ' + i.func_name;
@@ -1034,7 +1035,17 @@ namespace config
 				if (values.find('#') != std::string::npos && values.find("//") == std::string::npos)
 				{
 					// Pre processing
-					std::string toChange = values.substr(1, values.find(' ') - 1);
+					std::string toChange;
+					char ch{};
+					int i{};
+					while (ch != ' ')
+					{
+						ch = values[i];
+						toChange.push_back(ch);
+						i++;
+						if (ch == '#') { toChange.pop_back(); continue; }
+					}
+					toChange.pop_back();
 					if (toChange == "use-beta-features")
 					{
 						std::string opt = values.substr(values.find(' ') + 1);
