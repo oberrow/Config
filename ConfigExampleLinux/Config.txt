@@ -1,0 +1,49 @@
+// Example Configuration file to demonstrate the Config files data being read and re-read
+// The parser will deduce the type and give you the data as a struct
+// As long as there is an equal sign, a value and a variable name it will always work
+// Start ConfigExample.exe and try yourself
+// Change the data in this file when it tells you so you get new data
+// Data types are char, bool, int, double, hex_number (int64_t), string, array<[type], [size]>
+// Keywords are print([var name / string in quotes), printnl (print new line), println (print line),BREAK (case in-sensitive), TERMINATE_PARSER (case in-sensitive)
+// Pre-Processer keywords are "#use-beta-features" value can be true or false, #use-language-features value can be true or false
+#use-beta-features true
+#use-language-features true
+// This doesn't need any main function but if you add one you will need to call it explicitly
+int add(int a, int b)
+{
+	int r = a + b; return r;
+}
+bool boolean = true;
+int integer = 1 + 1;
+int toInt = hexToInt(0x10);
+double decimal = 10.2239;
+string toStr = toString(1);
+hex_number return_value = 0x00;
+hex_number toHex = intToHex(10);
+string str = "Hello, World!";
+char ch = 'O';
+string woof = "Hello";
+// ---------------------------------------------------------
+// ----------------------- Functions -----------------------
+// How a function declaration would look like:
+// [type] [name]([parameters])
+// {
+//	  ...
+// }
+// Example:
+// int Print(string _Str)
+// {
+//		print(_Str)
+// }
+// A function must not be able to access variables from another scope without it being added as a parameter
+// ---------------------------------------------------------
+// Operators
+// ---------------------------------------------------------
+// Arthmetric operators will be : +,-,*,/
+// Assignment operator will be: =
+// No need for other operators
+// Example
+// int integer = 0
+// integer + 1
+// print(integer)
+// ---------------------------------------------------------
