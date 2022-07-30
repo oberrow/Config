@@ -28,7 +28,7 @@ BOOL WINAPI CtrlCHandler(_In_ DWORD dwCtrlType)
 
 int main(int argc, char** argv, char** envp)
 {
-    SetConsoleCtrlHandler(CtrlCHandler, TRUE);
+    SetConsoleCtrlHandler(CtrlCHandler, true);
     std::jthread handle{ [&]()
         {
             while (true)
@@ -46,7 +46,7 @@ int main(int argc, char** argv, char** envp)
     try
     {
         auto start = std::chrono::system_clock::now();
-        config::Config c{ std::cin };
+        config::Config c{ inFileStream, true };
         auto end = std::chrono::system_clock::now();
         std::cout
             << "Parsed Data is : \n";
@@ -63,7 +63,7 @@ int main(int argc, char** argv, char** envp)
         (void)_getch();
         inFileStream.open("Config.txt");
         auto start2 = std::chrono::system_clock::now();
-        if (!c.ReloadConfigFile(inFileStream, true)) ExitProcess(1);
+        (void)c.ReloadConfigFile(inFileStream, true);
         auto end2 = std::chrono::system_clock::now();
         for (auto& i : c.GetErrorList())
             if (i == config::config_error::TERMINATE_PARSER_WAS_CALLED || i == config::config_error::INVALID_PREPROCESSING_DIRECTIVE) ExitProcess(1);
@@ -80,5 +80,11 @@ int main(int argc, char** argv, char** envp)
         inFileStream.close();
         ExitProcess((int)c.GetDataMap().at("return_value").hex_Out);
     }
-    catch (std::exception &e) { std::cout << "Exception thrown! what()" << e.what() << '\n'; }
+    catch (std::exception& e) 
+    { 
+        std::cout << "Exception thrown! what() " << e.what() << "\nPress any key to continue...\n";
+        inFileStream.close();
+        (void)_getch();
+        ExitProcess(1);
+    }
 }

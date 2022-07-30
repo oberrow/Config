@@ -11,16 +11,32 @@
 // This doesn't need any main function but if you add one you will need to call it explicitly
 int add(int a, int b)
 {
-	int r = a + b; return r;
+	int r = a + b;
+	return r;
+}
+int substract(int a, int b)
+{
+	int r = a - b;
+	return r;
+}
+int multiply(int a, int b)
+{
+	int r = a * b;
+	return r;
+}
+int divide(int a, int b)
+{
+	int r = a / b;
+	return r;
 }
 bool boolean = true;
-int integer = 1 + 1;
+int integer = add(1, 1);
 int toInt = hexToInt(0x10);
 double decimal = 10.2239;
 string toStr = toString(1);
 hex_number return_value = 0x00;
 hex_number toHex = intToHex(10);
-string string = "Hello, World!";
+string str = "Hello, World!";
 char ch = 'O';
 string woof = "Hello";
 // ---------------------------------------------------------
