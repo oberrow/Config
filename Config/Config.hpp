@@ -5,25 +5,45 @@
 #include <filesystem>
 #include <sstream>
 #include <unordered_map>
+#include <climits>
 #include <functional>
 #include "log.hpp"
 #include <cstring>
+#include <csignal>
 #include <array>
 #include <map>
 
+#ifdef WINDOWS
 // If x == true prints msg and cals __fastfail(exitCode) (int 29h in asm)
 #define FATAL_ASSERT(x, msg, exitCode) if(x)\
 {\
 	std::cout << msg;\
-	__fastfail(exitCode); /*does mov ecx, exitCode and then int 29h*/\
+	__fastfail(exitCode); /*does mov rcx, exitCode and then int 29h*/\
 }
 // If x == true prints msg and cals __debugbreak() (int 3 in asm)
 #define ASSERT(x, msg, run) if(x)\
 {\
 	std::cout << msg;\
-	__debugbreak(); /*does int 3*/\
+	__debugbreak() /*does int 3*/\
 	run\
 }
+#elif defined(__GNUC__)
+#define _Must_inspect_result_ __attribute__((warn_unused_result))
+#else
+// If x == true prints msg and cals exit(exitCode)
+#define FATAL_ASSERT(x, msg, exitCode) if(x)\
+{\
+	std::cout << msg;\
+	exit(exitCode) /*does mov rcx, exitCode and then int 29h*/\
+}
+// If x == true prints msg and calls std::raise() with SIGINT
+#define ASSERT(x, msg, run) if(x)\
+{\
+	std::cout << msg;\
+	std::raise(SIGINT);\
+	run\
+}
+#endif
 
 namespace config
 {
@@ -116,7 +136,8 @@ namespace config
 	{
 		using ce = config_error;
 		os << "Details are unknown to the operator<< so specific information is un-avalibable\n";
-		if (_Other == ce::TYPE_UNRECOGNIZED) os << "CONFIG-0000 Type is un-recognized";
+		if (_Other == ce::OK) os << "OK No error";
+		else if (_Other == ce::TYPE_UNRECOGNIZED) os << "CONFIG-0000 Type is un-recognized";
 		else if (_Other == ce::INCOMPATIBLE_TYPES) os << "CONFIG-0001 Type [] is in-compatable with declaration of type []";
 		else if (_Other == ce::DOUBLE_INT_CONVERSION) os << "CONFIG-0002 Cannot convert from type 'double' to 'int'!";
 		else if (_Other == ce::MISSING_BRACKET_IN_ARRAY_DECLARATION) os << "CONFIG-0003 Missing an '[' or a ']' in array declaration!";
@@ -141,33 +162,16 @@ namespace config
 		else if (_Other == ce::INCOMPLETE_TYPE_IS_NOT_ALLOWED) os << "CONFIG-0022 Incomplete type is not allowed! Is the type void?\n";
 		return os;
 	}
-	class config_exception
-	{
-	public:
-		const char* what() { return m_ErrorText; }
-		config_exception() = default;
-		config_exception(const char* errMessage, config_error err, int line, bool isHeap) :
-			m_Err{ err }, 
-			m_ErrorText{ errMessage },
-			m_Line{ line },
-			m_IsHeap{ isHeap }
-		{}
-		~config_exception()
-		{
-			if (m_IsHeap) free((void*)m_ErrorText);
-		}
-	private:
-		config_error m_Err = { config_error::OK };
-		const char* m_ErrorText = nullptr;
-		int m_Line{};
-		bool m_IsHeap{};
-	};
+	using config_exception = std::runtime_error;
 	class LogCover
 	{
 	public:
 		void LogError(std::string msg, config_error err, bool isFatal = false);
 		void LogError(const std::stringstream& msg_sstream, config_error err, bool isFatal = false);
 		void LogError(const std::ostringstream& msg_osstream, config_error err, bool isFatal = false);
+#ifndef WINDOWS
+		void LogError(const std::ostream& msg_ostream, config_error err, bool isFatal = false);
+#endif
 		LogCover(Log l, bool throwExceptionOnError, Config* _Other, int* ele, bool isFunction, int* line) :
 			m_Log{ l },
 			m_ThrowExceptionOnError{ throwExceptionOnError },
@@ -232,9 +236,9 @@ namespace config
 			std::ostringstream oss;
 			oss << *this;
 			std::string val = oss.str();
-			std::ranges::reverse(val.begin(), val.end());
+			std::reverse(val.begin(), val.end());
 			val.erase(val.find('='), std::string::npos);
-			std::ranges::reverse(val.begin(), val.end());
+			std::reverse(val.begin(), val.end());
 			return std::make_pair(this->type, val);
 		}
 		static std::string TypeToTypeName(types t)
@@ -257,13 +261,25 @@ namespace config
 		int64_t hex_Out{};
 		bool boolean_Out{};
 		char character_Out = '\0';
+		operator types() const { return this->type; }
+		operator int64_t() const { return this->hex_Out; }
+		operator int() const { return this->int_Out; }
+		operator char() const { return this->character_Out; }
+		operator double() const { return this->decimal_Out; }
+		operator bool() const { return this->boolean_Out; }
+		operator std::vector<char>		 &() { return character_array_Out;}
+		operator std::vector<int>		 &() { return int_array_Out;}
+		operator std::vector<std::string>&() { return string_array_Out;}
+		operator std::vector<double>	 &() { return decimal_array_Out; }
+		operator std::vector<int64_t>	 &() { return hex_array_Out;}
+		operator std::vector<bool>		 &() { return boolean_array_Out;}
 		// Array definitions
 		// --------------
 		std::vector<char>			character_array_Out;
 		std::vector<int>			int_array_Out;
 		std::vector<std::string>	string_array_Out;
 		std::vector<double>			decimal_array_Out;
-		std::vector<long long>		hex_array_Out;
+		std::vector<int64_t>		hex_array_Out;
 		std::vector<bool>			boolean_array_Out;
 		size_t array_Size = static_cast<size_t>(-1);
 		bool is_Array = false;
@@ -314,31 +330,31 @@ namespace config
 	};
 	inline std::ostream& operator<<(std::ostream& os, const Store& s)
 	{
-		if (	 s.type == types::basic_string && !s.str_Out.empty() && !s.is_Array)
+		if (	 s == types::basic_string && !s.str_Out.empty() && !s.is_Array)
 		{
-			os << s.var_name << " = " << s.str_Out;
+			os << s.var_name << " = \"" << s.str_Out << '\"';
 		}
-		else if (s.type == types::basic_character && !s.is_Array)
+		else if (s == types::basic_character && !s.is_Array)
 		{
 			os << s.var_name << " = " << s.character_Out;
 		}
-		else if (s.type == types::basic_int && !s.is_Array)
+		else if (s == types::basic_int && !s.is_Array)
 		{
 			os << s.var_name << " = " << s.int_Out;
 		}
-		else if (s.type == types::basic_hex && !s.is_Array)
+		else if (s == types::basic_hex && !s.is_Array)
 		{
 			os << s.var_name << " = 0x" << std::hex << std::uppercase << s.hex_Out << std::dec << std::nouppercase;
 		}
-		else if (s.type == types::basic_boolean && !s.is_Array)
+		else if (s == types::basic_boolean && !s.is_Array)
 		{
 			os << s.var_name << " = " << std::boolalpha << s.boolean_Out << std::noboolalpha;
 		}
-		else if (s.type == types::basic_double && !s.is_Array)
+		else if (s == types::basic_double && !s.is_Array)
 		{
 			os << s.var_name << " = " << s.decimal_Out;
 		}
-		else if (s.type == types::basic_string && s.is_Array)
+		else if (s == types::basic_string && s.is_Array)
 		{
 			int index = 0;
 			for (auto& i : s.string_array_Out)
@@ -347,7 +363,7 @@ namespace config
 				index++;
 			}
 		}
-		else if (s.type == types::basic_character && s.is_Array)
+		else if (s == types::basic_character && s.is_Array)
 		{
 			std::string arr;
 			for (auto& i : s.character_array_Out)
@@ -358,7 +374,7 @@ namespace config
 			if (arr[arr.size() - 1] != '\n') last = '\n';
 			os << s.var_name << " = " << arr << last;
 		}
-		else if (s.type == types::basic_int && s.is_Array)
+		else if (s == types::basic_int && s.is_Array)
 		{
 			int index = 0;
 			for (auto& i : s.int_array_Out)
@@ -367,7 +383,7 @@ namespace config
 				index++;
 			}
 		}
-		else if (s.type == types::basic_hex && s.is_Array)
+		else if (s == types::basic_hex && s.is_Array)
 		{
 			int index = 0;
 			for (auto& i : s.hex_array_Out)
@@ -376,7 +392,7 @@ namespace config
 				index++;
 			}
 		}
-		else if (s.type == types::basic_boolean && s.is_Array)
+		else if (s == types::basic_boolean && s.is_Array)
 		{
 			int index = 0;
 			for (auto i : s.boolean_array_Out)
@@ -385,7 +401,7 @@ namespace config
 				index++;
 			}
 		}
-		else if (s.type == types::basic_double && s.is_Array)
+		else if (s == types::basic_double && s.is_Array)
 		{
 			int index = 0;
 			for (auto& i : s.decimal_array_Out)
@@ -394,7 +410,7 @@ namespace config
 				index++;
 			}
 		}
-		else if (s.type == types::invalid_type)
+		else if (s == types::invalid_type)
 		{
 			os << "I don't know how you could've gotten an invalid type. Is the Store object default initalized?";
 		}
@@ -404,6 +420,11 @@ namespace config
 		}
 		return os;
 	}
+	struct Macro
+	{
+		std::string macro_name;
+		std::string dataToCopy;
+	};
 	struct Function
 	{
 		std::vector<std::string> actions;
@@ -439,7 +460,9 @@ namespace config
 			std::string it{};
 			std::string content{};
 			std::string currentSemicolon{};
-			while (std::getline(ss, content))
+			std::stringstream ss2;
+			ss2 << ss.str();
+			while (std::getline(ss2, content))
 			{
 				if (content.find("//") != std::string::npos) continue;
 				for (int i = 0; i < std::count(content.begin(), content.end(), ';') + 1; i++)
@@ -473,11 +496,14 @@ namespace config
 			}
 			return !not_found;
 		}
-		bool isDecimalNumber(const std::string& s) const
+		bool isDecimalNumber(const std::string_view& s) const
 		{
-			return atof(s.c_str()) > 0;
+			std::string _s;
+			for (auto& i : s)
+				_s.push_back((char)i);
+			return atof(_s.c_str()) > 0;
 		}
-		bool isNumber(const std::string& s)
+		bool isNumber(const std::string_view& s)
 		{
 			// Replaced so that it never returns false when it should return true
 			// return std::atoi(s.c_str()) > 0);
@@ -485,12 +511,41 @@ namespace config
 			for (auto i : s)
 			{
 				// If the number isn't a valid digit or '-' or any other operators then return false
-				if (!isdigit(i) && i != '-' && i != '+' && i != '/' && i != '*' && i != '%' && i != ' ') return false;
-				// If it is then it will continue the loop
-				else continue;
+				try
+				{
+					if (!isdigit(i) && i != '-' && i != '+' && i != '/' && i != '*' && i != '%' && i != ' ') return false;
+					// If it is then it will continue the loop
+					else continue;
+				}
+				catch (std::out_of_range) { continue; }
 			}
 			// If nothing returns false then it will return true
 			return true;
+		}
+		bool usesArthmetricOperators(const std::string_view& pre_Values, const std::string_view& type)
+		{
+			if (type == "int")
+				return
+				(pre_Values.find('+') != std::string::npos ||
+					pre_Values.find('-') != std::string::npos ||
+					pre_Values.find('*') != std::string::npos ||
+					pre_Values.find('/') != std::string::npos ||
+					pre_Values.find('%') != std::string::npos);
+			else if (type == "double")
+				return
+				(pre_Values.find('+') != std::string::npos ||
+					pre_Values.find('-') != std::string::npos ||
+					pre_Values.find('*') != std::string::npos ||
+					pre_Values.find('/') != std::string::npos ||
+					pre_Values.find('%') != std::string::npos) && isDecimalNumber(pre_Values);
+			else if (type == "hex_number")
+				return
+				(pre_Values.find('+') != std::string::npos ||
+					pre_Values.find('-') != std::string::npos ||
+					pre_Values.find('*') != std::string::npos ||
+					pre_Values.find('/') != std::string::npos ||
+					pre_Values.find('%') != std::string::npos) && isHexNumber(pre_Values);
+			else return false;
 		}
 		bool isHexNumber(std::string_view const& string) const
 		{
@@ -530,8 +585,8 @@ namespace config
 			}
 		}
 		std::vector<Store> data;
-		Store returnValue{}; // Will only not be default initalized when scope != "main" and functionType != "void"
 		std::unordered_map<std::string, Store> data_map;
+		Store returnValue{}; // Will only not be default initalized when scope != "main" and functionType != "void"
 		std::map<std::string, Function> function_map;
 		const static inline int size = 7;
 		bool isStdCin = false; // Hopes the user is a good one and gives an std::ifstream object instead of std::cin
@@ -574,7 +629,7 @@ namespace config
 				data[element].character_array_Out.clear();
 			}
 		}
-		enum class basic_math_error { 
+		enum class basic_math_error {
 			OK, // No error
 			ERR, // Error
 			NOTHING_TO_DO // No operation to calculate
@@ -585,25 +640,26 @@ namespace config
 			config_error cnfg_err = config_error::OK; // Config error state
 			double result; // Result
 		};
+		using config_exception = std::runtime_error;
 		types GetTypeFromString(std::string str)
 		{
 			if ((!isNumber(str) && str == "true") || (!isNumber(str) && str == "false")) return types::basic_boolean;
-			else if (isNumber(str)) return types::basic_int;
-			else if (isHexNumber(str)) return types::basic_hex;
-			else if (isDecimalNumber(str)) return types::basic_double;
+			else if (isNumber(str) || usesArthmetricOperators(str, "int")) return types::basic_int;
+			else if (isHexNumber(str) || usesArthmetricOperators(str, "hex_number")) return types::basic_hex;
+			else if (isDecimalNumber(str) || usesArthmetricOperators(str, "double")) return types::basic_double;
 			else if (!isNumber(str) && str.find('\'') != std::string::npos) return types::basic_character;
 			else if (!isNumber(str)) return types::basic_string;
 			else return types::invalid_type;
 		}
-		/* Returns the math error status, the result and the config error status 
-	       Since the type of the result can be a double it will use a double as it is the biggest integer type along with int64_t
+		/* Returns the math error status, the result and the config error status
+		   Since the type of the result can be a double it will use a double as it is the biggest integer type along with int64_t
 		*/
 		math_error DoMath(std::string& values)
 		{
 			math_error m_err = { basic_math_error::OK, config_error::OK, 0.00 };
 			Log l{ Log::levelInfoId };
 			LogCover lC{ l, throwExceptionOnError, this, &err_element, isFunction, &line };
-			std::string var_one = values.substr(0, values.find(' ') - 1); // First operand
+			std::string var_one = values.substr(0, values.find(' ')); // First operand
 			if (data_map.contains(var_one))
 			{
 				types type = GetTypeFromString(values);
@@ -616,10 +672,15 @@ namespace config
 						0.00
 					};
 				}
-				if (values.		find('+') != std::string::npos)
+				if (values.find('+') != std::string::npos)
 				{
 					std::string operand1 = values.substr(0, values.find('+') - 1);
 					std::string operand2 = values.substr(values.find('+') + 1, std::string::npos);
+					remove_trailing_whitespaces(operand2);
+					if (data_map.contains(operand1)) operand1 = data_map.at(operand1).Get().second;
+					if (data_map.contains(operand2)) operand2 = data_map.at(operand2).Get().second;
+					remove_trailing_whitespaces(operand1);
+					remove_trailing_whitespaces(operand2);
 					std::erase(operand2, ' ');
 					if (type == types::basic_int)
 					{
@@ -637,200 +698,113 @@ namespace config
 						std::istringstream(operand2) >> std::hex >> temp2;
 						return { basic_math_error::OK, config_error::OK, static_cast<double>(temp1 + temp2) };
 					}
-					else if (type == types::basic_character)
-					{
-						if (!(std::atoi(operand2.c_str()) < 127) || !(std::atoi(operand2.c_str()) > -128))
-						{
-							return { basic_math_error::OK, config_error::OK, static_cast<double>(std::atoi(operand1.c_str()) + std::atoi(operand2.c_str())) };
-						}
-					}
 				}
 				else if (values.find('-') != std::string::npos)
 				{
-					std::string operand1 = values.substr(0, values.find('-') - 1); // Variable name to add to
+					std::string operand1 = values.substr(0, values.find('-') - 1);
 					std::string operand2 = values.substr(values.find('-') + 1, std::string::npos);
+					remove_trailing_whitespaces(operand2);
+					if (data_map.contains(operand1)) operand1 = data_map.at(operand1).Get().second;
+					if (data_map.contains(operand2)) operand2 = data_map.at(operand2).Get().second;
+					remove_trailing_whitespaces(operand1);
+					remove_trailing_whitespaces(operand2);
 					std::erase(operand2, ' ');
-					if (!data_map.contains(operand1))
+					if (type == types::basic_int)
 					{
-						lC.LogError((std::ostringstream() << "CONFIG-0013 " << operand1 << " is not declared in this scope!").str(), config_error::VAR_IS_NOT_DECLARED_IN_SCOPE);
-						m_err.cnfg_err = config_error::VAR_IS_NOT_DECLARED_IN_SCOPE;
-						m_err.ec = basic_math_error::ERR;
-						return m_err;
+						return { basic_math_error::OK, config_error::OK, static_cast<double>(std::atoi(operand1.c_str()) - std::atoi(operand2.c_str())) };
 					}
-					else
+					else if (type == types::basic_double)
 					{
-						int i = 0;
-						for (; i < data.size(); i++)
-						{
-							if (data[i].var_name == operand1) break;
-							else continue;
-						}
-						if (type == types::basic_string)
-						{
-							lC.LogError((std::ostringstream() << "CONFIG-0014 " << operand1 << " is a string!").str(), config_error::TYPE_IS_A_STRING);
-							m_err.cnfg_err = config_error::TYPE_IS_A_STRING;
-							m_err.ec = basic_math_error::ERR;
-							return m_err;
-						}
-						else
-						{
-							if (type == types::basic_int)
-							{
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].int_Out - std::atoi(operand2.c_str())) };
-							}
-							else if (type == types::basic_double)
-							{
-								return { basic_math_error::OK, config_error::OK, data_map[operand1].decimal_Out - std::atof(operand2.c_str()) };
-							}
-							else if (type == types::basic_hex)
-							{
-								int64_t temp{};
-								std::istringstream(operand2) >> std::hex >> temp;
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].hex_Out - temp) };
-							}
-							else if (type == types::basic_character)
-							{
-								if (!(std::atoi(operand2.c_str()) < CHAR_MIN) || !(std::atoi(operand2.c_str()) > CHAR_MAX))
-								{
-									return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].character_Out - std::atoi(operand2.c_str())) };
-								}
-							}
-						}
+						return { basic_math_error::OK, config_error::OK, std::atof(operand1.c_str()) - std::atof(operand2.c_str()) };
 					}
-				}
-				else if (values.find('/') != std::string::npos)
-				{
-					std::string operand1 = values.substr(0, values.find('-') - 1); // Variable name to add to
-					std::string operand2 = values.substr(values.find('-') + 1, std::string::npos);
-					std::erase(operand2, ' ');
-					if (!data_map.contains(operand1))
+					else if (type == types::basic_hex)
 					{
-						lC.LogError((std::ostringstream() << "CONFIG-0013 " << operand1 << " is not declared in this scope!").str(), config_error::VAR_IS_NOT_DECLARED_IN_SCOPE);
-						m_err.cnfg_err = config_error::VAR_IS_NOT_DECLARED_IN_SCOPE;
-						m_err.ec = basic_math_error::ERR;
-						return m_err;
-					}
-					else
-					{
-						int i = 0;
-						for (; i < data.size(); i++)
-						{
-							if (data[i].var_name == operand1) break;
-							else continue;
-						}
-						if (type == types::basic_string)
-						{
-							lC.LogError((std::ostringstream() << "CONFIG-0014 " << operand1 << " is a string!").str(), config_error::TYPE_IS_A_STRING);
-							m_err.cnfg_err = config_error::TYPE_IS_A_STRING;
-							m_err.ec = basic_math_error::ERR;
-							return m_err;
-						}
-						else
-						{
-							if (type == types::basic_int)
-							{
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].int_Out / std::atoi(operand2.c_str())) };
-							}
-							else if (type == types::basic_double)
-							{
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].decimal_Out / std::atoi(operand2.c_str())) };
-							}
-							else if (type == types::basic_hex)
-							{
-								int64_t temp{};
-								std::istringstream(operand2) >> std::hex >> temp;
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].hex_Out / temp) };
-							}
-							else if (type == types::basic_character)
-							{
-								if (!(std::atoi(operand2.c_str()) < 127) || !(std::atoi(operand2.c_str()) > -128))
-								{
-									return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].character_Out / std::atoi(operand2.c_str())) };
-								}
-							}
-						}
+						int64_t temp1{};
+						int64_t temp2{};
+						std::istringstream(operand1) >> std::hex >> temp1;
+						std::istringstream(operand2) >> std::hex >> temp2;
+						return { basic_math_error::OK, config_error::OK, static_cast<double>(temp1 - temp2) };
 					}
 				}
 				else if (values.find('*') != std::string::npos)
 				{
-					std::string operand1 = values.substr(0, values.find('-') - 1); // Variable name to add to
-					std::string operand2 = values.substr(values.find('-') + 1, std::string::npos);
+					std::string operand1 = values.substr(0, values.find('*') - 1);
+					std::string operand2 = values.substr(values.find('*') + 1, std::string::npos);
+					remove_trailing_whitespaces(operand2);
+					if (data_map.contains(operand1)) operand1 = data_map.at(operand1).Get().second;
+					if (data_map.contains(operand2)) operand2 = data_map.at(operand2).Get().second;
+					remove_trailing_whitespaces(operand1);
+					remove_trailing_whitespaces(operand2);
 					std::erase(operand2, ' ');
-					if (!data_map.contains(operand1))
+					if (type == types::basic_int)
 					{
-						lC.LogError((std::ostringstream() << "CONFIG-0013 " << operand1 << " is not declared in this scope!").str(), config_error::VAR_IS_NOT_DECLARED_IN_SCOPE);
-						m_err.cnfg_err = config_error::VAR_IS_NOT_DECLARED_IN_SCOPE;
-						m_err.ec = basic_math_error::ERR;
-						return m_err;
+						return { basic_math_error::OK, config_error::OK, static_cast<double>(std::atoi(operand1.c_str()) * std::atoi(operand2.c_str())) };
 					}
-					else
+					else if (type == types::basic_double)
 					{
-						int i = 0;
-						for (; i < data.size(); i++)
-						{
-							if (data[i].var_name == operand1) break;
-							else continue;
-						}
-						if (type == types::basic_string)
-						{
-							lC.LogError((std::ostringstream() << "CONFIG-0014 " << operand1 << " is a string!").str(), config_error::TYPE_IS_A_STRING);
-							m_err.cnfg_err = config_error::TYPE_IS_A_STRING;
-							m_err.ec = basic_math_error::ERR;
-							return m_err;
-						}
-						else
-						{
-							if (type == types::basic_int)
-							{
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].int_Out + std::atoi(operand2.c_str())) };
-							}
-							else if (type == types::basic_double)
-							{
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].decimal_Out * std::atoi(operand2.c_str())) };
-							}
-							else if (type == types::basic_hex)
-							{
-								int64_t temp{};
-								std::istringstream(operand2) >> std::hex >> temp;
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].hex_Out * temp) };
-							}
-							else if (type == types::basic_character)
-							{
-								if (!(std::atoi(operand2.c_str()) < 127) || !(std::atoi(operand2.c_str()) > -128))
-								{
-									return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].character_Out * std::atoi(operand2.c_str())) };
-								}
-							}
-						}
+						return { basic_math_error::OK, config_error::OK, std::atof(operand1.c_str()) * std::atof(operand2.c_str()) };
+					}
+					else if (type == types::basic_hex)
+					{
+						int64_t temp1{};
+						int64_t temp2{};
+						std::istringstream(operand1) >> std::hex >> temp1;
+						std::istringstream(operand2) >> std::hex >> temp2;
+						return { basic_math_error::OK, config_error::OK, static_cast<double>(temp1 * temp2) };
+					}
+				}
+				else if (values.find('/') != std::string::npos)
+				{
+					std::string operand1 = values.substr(0, values.find('/') - 1);
+					std::string operand2 = values.substr(values.find('/') + 1, std::string::npos);
+					remove_trailing_whitespaces(operand2);
+					if (data_map.contains(operand1)) operand1 = data_map.at(operand1).Get().second;
+					if (data_map.contains(operand2)) operand2 = data_map.at(operand2).Get().second;
+					remove_trailing_whitespaces(operand1);
+					remove_trailing_whitespaces(operand2);
+					std::erase(operand2, ' ');
+					if (type == types::basic_int)
+					{
+						return { basic_math_error::OK, config_error::OK, static_cast<double>(std::atoi(operand1.c_str()) / std::atoi(operand2.c_str())) };
+					}
+					else if (type == types::basic_double)
+					{
+						return { basic_math_error::OK, config_error::OK, std::atof(operand1.c_str()) / std::atof(operand2.c_str()) };
+					}
+					else if (type == types::basic_hex)
+					{
+						int64_t temp1{};
+						int64_t temp2{};
+						std::istringstream(operand1) >> std::hex >> temp1;
+						std::istringstream(operand2) >> std::hex >> temp2;
+						return { basic_math_error::OK, config_error::OK, static_cast<double>(temp1 / temp2) };
 					}
 				}
 				else if (values.find('%') != std::string::npos)
 				{
-					std::string operand1 = values.substr(0, values.find('-') - 1); // Variable name to add to
-					std::string operand2 = values.substr(values.find('-') + 1, std::string::npos);
-					std::erase(operand2, ' ');								
+					std::string operand1 = values.substr(0, values.find('%') - 1); // Variable name to add to
+					std::string operand2 = values.substr(values.find('%') + 1, std::string::npos);
+					remove_trailing_whitespaces(operand2);
+					if (data_map.contains(operand1)) operand1 = data_map.at(operand1).Get().second;
+					if (data_map.contains(operand2)) operand2 = data_map.at(operand2).Get().second;
+					remove_trailing_whitespaces(operand1);
+					remove_trailing_whitespaces(operand2);
+					std::erase(operand2, ' ');
 					if (type == types::basic_int)
-							{
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].int_Out % std::atoi(operand2.c_str())) };
-							}
+					{
+						return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].int_Out % std::atoi(operand2.c_str())) };
+					}
 					else if (type == types::basic_double)
-							{
-								lC.LogError("CONFIG-0017 Cannot modulo a variable of type double!\n", config_error::CANNOT_MODULO_DOUBLE);
-								return { basic_math_error::ERR, config_error::CANNOT_MODULO_DOUBLE, 0.00 };
-							}
+					{
+						lC.LogError("CONFIG-0017 Cannot modulo a variable of type double!\n", config_error::CANNOT_MODULO_DOUBLE);
+						return { basic_math_error::ERR, config_error::CANNOT_MODULO_DOUBLE, 0.00 };
+					}
 					else if (type == types::basic_hex)
-							{
-								int64_t temp{};
-								std::istringstream(operand2) >> std::hex >> temp;
-								return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].hex_Out % temp) };
-							}
-					else if (type == types::basic_character)
-							{
-								if (!(std::atoi(operand2.c_str()) < 127) || !(std::atoi(operand2.c_str()) > -128))
-								{
-									return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].character_Out % std::atoi(operand2.c_str())) };
-								}
-							}
+					{
+						int64_t temp{};
+						std::istringstream(operand2) >> std::hex >> temp;
+						return { basic_math_error::OK, config_error::OK, static_cast<double>(data_map[operand1].hex_Out % temp) };
+					}
 				}
 			}
 			return { basic_math_error::NOTHING_TO_DO, config_error::OK, 0.00 };
@@ -843,15 +817,15 @@ namespace config
 				else if (type != type_names[i] && i == size - 1) return false;
 			}
 		}
-		constexpr bool isBuiltIn(std::string const& val) const
+		bool isBuiltIn(std::string const& val) const
 		{
 			return val.find("print") != std::string::npos || val.find("hexToInt") != std::string::npos || val.find("intToHex") != std::string::npos || val.find("toString") != std::string::npos;
 		}
-		constexpr bool isNotBuiltInFunction(std::string const& val) const
+		bool isNotBuiltInFunction(std::string const& val) const
 		{
 			return val.find("print") == std::string::npos && val.find("hexToInt") == std::string::npos && val.find("intToHex") == std::string::npos && val.find("toString") == std::string::npos;
 		}
-		constexpr bool isNotBuiltInFunction(std::string const& val, size_t nval) const
+		bool isNotBuiltInFunction(std::string const& val, size_t nval) const
 		{
 			size_t print, hexToInt, intToHex, toString;
 			print = val.find("print");
@@ -882,15 +856,16 @@ namespace config
 		   string stream to avoid invalidating iterators
 		*/
 		std::vector<int> ignored_lines; 
+		// Runs a function using the f parameter
 		bool RunFunction(Function& f, std::vector<std::string> passedInParameters, bool& willTerminate, bool& errState, Store& functionReturnValue)
 		{
 			LogCover lC{ Log(Log::levelErrorId), throwExceptionOnError, this, &err_element, isFunction, &line};
-			// Runs a function using the f parameter
 			std::istringstream it;
 			std::string toIt;
 			int index{};
 			bool willExit = false;
-			toIt.append("#use-beta-features true\n");
+			std::string options = "use-beta-features " + std::to_string(this->isExperimental);
+			toIt.append(options);
 			toIt.append("#use-language-features true\n");
 			for (auto& [k, i] : function_map)
 			{
@@ -960,7 +935,7 @@ namespace config
 							data = data_map.at(var_name).Get().second;
 						} catch(std::out_of_range) 
 						{
-							lC.LogError(std::stringstream() << "CONFIG-0010 Could not find " << var_name << " in data map", config_error::COULD_NOT_FIND_IN_DATA_MAP);
+							lC.LogError(std::ostringstream() << "CONFIG-0010 Could not find " << var_name << " in data map", config_error::COULD_NOT_FIND_IN_DATA_MAP);
 						}
 						std::string toStringVarDefinitionExist = i + " = " + "toString(" + remove_trailing_whitespaces(data) + ")";
 						if(!data_map.contains(var_name))
@@ -987,6 +962,7 @@ namespace config
 					}
 					index++;
 				}
+				index++;
 			}
 			if (willExit) return !willExit;
 			for (auto& i : f.actions)
@@ -996,7 +972,7 @@ namespace config
 			}
 			it.str(toIt);
 			types ty = GetTypeFromTypename(f.func_type);
-			Config c{ it, f.func_name, ty }; // internal function scope
+			Config c{ it, throwExceptionOnError, f.func_name, ty }; // internal function scope
 			functionReturnValue = c.returnValue;
 			if (!c.good)
 			{
@@ -1026,7 +1002,7 @@ namespace config
 				preIt << is.rdbuf();
 				it << seperateSemiColonsToNl(preIt);
 			}
-			else it.set_rdbuf(is.rdbuf());
+			else it << is.rdbuf();
 			while (std::getline(it, values))
 			{
 				if (isStdCin && values == "EOF") break;
@@ -1036,7 +1012,7 @@ namespace config
 				remove_trailing_tabs(valuesCpy);
 				if (!values.empty() && values.front() == '{') continue;
 				bool leave = false;
-				if (isExperimental && !ignored_lines.empty() && !isIfStatment)
+				if (!ignored_lines.empty() && !isIfStatment)
 				{
 					for (int i = 0; i < ignored_lines.size() - 1; i++)
 					{
@@ -1063,7 +1039,6 @@ namespace config
 					{
 						std::string opt = values.substr(values.find(' ') + 1);
 						std::istringstream(opt) >> std::boolalpha >> isExperimental;
-						throwExceptionOnError = throwExceptionOnError && isExperimental;
 					}
 					else if (toChange == "use-language-features")
 					{
@@ -1075,10 +1050,11 @@ namespace config
 						std::string opt = values.substr(values.find(' ') + 1);
 						std::istringstream(opt) >> std::boolalpha >> canRickRoll;
 					}
+					else if (toChange == "define") {}
 					else 
 					{ 
 						lC.LogError(
-							(std::ostringstream() << "CONFIG-0018 Invalid pre-processing directive! Directive is " << toChange << " Line is " << line).str(),
+							std::ostringstream() << "CONFIG-0018 Invalid pre-processing directive! Directive is " << toChange << " Line is " << line,
 							config_error::INVALID_PREPROCESSING_DIRECTIVE,
 							true
 						);
@@ -1090,17 +1066,33 @@ namespace config
 					if (values.find("print") != std::string::npos && !isLanguage) continue; // ignore line
 					remove_trailing_whitespaces(values);
 					remove_trailing_tabs(values);
+#ifdef WINDOWS
 					if (_stricmp(values.c_str(), "BREAK") == 0)
 					{
 						__debugbreak();
 						continue;
 					}
+#else
+					if (strcasecmp(values.c_str(), "BREAK") == 0)
+					{
+						std::raise(SIGINT);
+						continue;
+					}
+#endif
+#ifdef WINDOWS
 					else if (_stricmp(values.c_str(), "TERMINATE_PARSER") == 0) 
+#else
+					else if (strcasecmp(values.c_str(), "TERMINATE_PARSER") == 0)
+#endif
 					{
 						if (!isFunction)
 						{
-							lC.LogError((std::ostringstream() << "CONFIG-0016 at line " << line << " TERMINATE_PARSER was called!\n").str(), config_error::TERMINATE_PARSER_WAS_CALLED, true);
+							lC.LogError(std::ostringstream() << "CONFIG-0016 at line " << line << " TERMINATE_PARSER was called!\n", config_error::TERMINATE_PARSER_WAS_CALLED, true);
+#ifdef WINDOWS
 							__debugbreak();
+#else
+							std::raise(SIGINT);
+#endif
 						}
 						else
 						{
@@ -1111,10 +1103,12 @@ namespace config
 					}
 					else if (values == "rickroll" && canRickRoll)
 					{
-						std::cout <<
-							"You asked for this:\n"
+						std::cout 
+							<< "You asked for this:\n"
 							<< rickrolllyrics;
+#ifdef WINDOWS
 						ShellExecute(0, 0, L"https://www.youtube.com/watch?v=dQw4w9WgXcQ", 0, 0, SW_MINIMIZE);
+#endif
 						Store var = {};
 						var.str_Out = rickrolllyrics;
 						var.type = types::basic_string;
@@ -1123,12 +1117,12 @@ namespace config
 						data.push_back(var);
 						continue;
 					}
-					if (values.find('(') != std::string::npos && isNotBuiltInFunction(values) && isExperimental && values.find("if") == std::string::npos && isLanguage)
+					if (values.find('(') != std::string::npos && isNotBuiltInFunction(values) && values.find("if") == std::string::npos && isLanguage)
 					{
 						Function f = {};
 						f.startLine = line;
 						std::string func_type = values.substr(0, values.find_first_of(' '));
-						if (!isValidType(func_type)) goto runFunc;
+						if (!isValidType(func_type) || values.find('=') != std::string::npos) goto runFunc;
 						std::string function_name = values.substr(values.find_first_of(' '), values.find('(') - 1);
 						std::string parameters = values.substr(values.find('('), std::string::npos);
 						function_name.erase(function_name.find('('), std::string::npos);
@@ -1193,10 +1187,25 @@ namespace config
 						if (this_function_type == types::basic_void) break;
 						std::string operand1 = values.substr(values.find_first_of('n') + 2, std::string::npos);
 						types type = GetTypeFromString(operand1);
-						if (type != this_function_type)
+						if (type != this_function_type && !data_map.contains(operand1))
 						{
 							lC.LogError(std::ostringstream() << "CONFIG-0001 'return' Type " << Store::TypeToTypeName(type) << " is incompatible with type " << Store::TypeToTypeName(this_function_type), config_error::INCOMPATIBLE_TYPES);
 							continue;
+						}
+						if (data_map.contains(operand1))
+						{
+							auto& val = data_map.at(operand1);
+							if (val.type != this_function_type)
+							{
+								lC.LogError(std::ostringstream() << "CONFIG-0001 'return' Type " << Store::TypeToTypeName(type) << " is incompatible with type " << Store::TypeToTypeName(this_function_type), config_error::INCOMPATIBLE_TYPES);
+								continue;
+							}
+							returnValue = val;
+							break;
+						}
+						else
+						{
+							pre_Values = values.substr(values.find_first_of(' ') + 1, std::string::npos);
 						}
 						if (type == types::basic_boolean)
 						{
@@ -1240,7 +1249,7 @@ namespace config
 						}
 						else if (type == types::basic_string)
 						{
-							size_t count = std::ranges::count(pre_Values.begin(), pre_Values.end(), '\"');
+							size_t count = std::count(pre_Values.begin(), pre_Values.end(), '\"');
 							if (count > 2)
 							{
 								lC.LogError("CONFIG-0009 Too much \"s in string!", config_error::TOO_MUCH_OR_TO_LITTLE_QUOTATION_MARKS_IN_STRING_DECLARATION);
@@ -1255,9 +1264,11 @@ namespace config
 							std::string str_Val;
 							for (auto& i : pre_str_val)
 							{
-								if (i == '\"') break;
+								if (i == '\"') continue;
 								else str_Val.push_back(i);
 							}
+							returnValue.str_Out = str_Val;
+							returnValue.type = types::basic_string;
 						}
 						break;
 					}
@@ -1276,7 +1287,7 @@ namespace config
 						if (!isReAssign) goto nReAssign;
 						if (!data_map.contains(word1))
 						{
-							lC.LogError((std::ostringstream() << "CONFIG-0013 " << word1 << " was not declared in this scope!").str(), config_error::VAR_IS_NOT_DECLARED_IN_SCOPE);
+							lC.LogError(std::ostringstream() << "CONFIG-0013 " << word1 << " was not declared in this scope!", config_error::VAR_IS_NOT_DECLARED_IN_SCOPE);
 							continue;
 						}
 						int i{};
@@ -1406,7 +1417,7 @@ namespace config
 							}
 							std::erase(pre_Values, '\"');
 							remove_trailing_whitespaces(pre_Values);
-							data[(i == data.size()) ? i - 1 : i ].type = types::basic_string;
+							data[(i == data.size()) ? static_cast<std::vector<config::Store, std::allocator<config::Store>>::size_type>(i) - 1 : i].type = types::basic_string;
 							data_map[var_name].str_Out = pre_Values;
 						}
 						continue;
@@ -1471,20 +1482,20 @@ namespace config
 								eState = true;
 								break;
 							}
-							if (type == type_names[i]) { break; }
-							else if (type != type_names[i] && i == size - 1 && type.find('}') == std::string::npos && type.find('(') == std::string::npos)
-							{
-								lC.LogError((std::stringstream() << "CONFIG-0000 Un-recognized type! Type is " << type << "\n").str(),
-									config_error::TYPE_UNRECOGNIZED);
-								continue;
-							}
 							if (var_name == type_names[i])
 							{
 								lC.LogError(
-									(std::ostringstream() << "CONFIG-0012 Variable name cannot be a type name! Type is " << type).str(),
+									std::ostringstream() << "CONFIG-0012 Variable name cannot be a type name! Type is " << type,
 									config_error::VAR_NAME_IS_A_TYPE_NAME);
 								eState = true;
 								break;
+							}
+							if (type == type_names[i]) { break; }
+							else if (type != type_names[i] && i == size - 1 && type.find('}') == std::string::npos && type.find('(') == std::string::npos)
+							{
+								lC.LogError(std::ostringstream() << "CONFIG-0000 Un-recognized type! Type is " << type << "\n",
+									config_error::TYPE_UNRECOGNIZED);
+								continue;
 							}
 						}
 						if (eState) continue;
@@ -1496,7 +1507,7 @@ namespace config
 						if (values.find('{') == std::string::npos && values.find('}') == std::string::npos && values.find('(') == std::string::npos && values.find("return") == std::string::npos)
 						{
 							lC.LogError(
-								(std::stringstream() << "\nCONFIG-0004 Missing an \"=\" sign in provided std::istream& object! Line is " << line).str(),
+								std::ostringstream() << "\nCONFIG-0004 Missing an \"=\" sign in provided std::istream& object! Line is " << line,
 								config_error::MISSING_EQUAL_SIGN
 							);
 							continue;
@@ -1593,13 +1604,13 @@ namespace config
 					pre_Values.append("\0");
 					if (!isArray && type == "string" && pre_Values.find("toString") == std::string::npos)
 					{
-						size_t count = std::ranges::count(pre_Values.begin(), pre_Values.end(), '\"');
+						size_t count = std::count(pre_Values.begin(), pre_Values.end(), '\"');
 						if (count > 2)
 						{
 							lC.LogError("CONFIG-0009 Too much \"s in string!", config_error::TOO_MUCH_OR_TO_LITTLE_QUOTATION_MARKS_IN_STRING_DECLARATION);
 							continue;
 						}
-						else if (count < 2)
+						else if (count < 2 && !function_map.contains(pre_Values.substr(0, pre_Values.find('('))))
 						{
 							lC.LogError("CONFIG-0009 Too little \"s in string!", config_error::TOO_MUCH_OR_TO_LITTLE_QUOTATION_MARKS_IN_STRING_DECLARATION);
 							continue;
@@ -1609,7 +1620,7 @@ namespace config
 					if (isArray && type == "char" && pre_Values.find('\"') != std::string::npos)
 					{
 						l.LoglevelWarn("CONFIG-0015 Do not use a char array as a string! Use the string type instead");
-						size_t count = std::ranges::count(pre_Values.begin(), pre_Values.end(), '\"');
+						size_t count = std::count(pre_Values.begin(), pre_Values.end(), '\"');
 						if (count > 2)
 						{
 							lC.LogError("CONFIG-0009 Too much \"s in string!", config_error::TOO_MUCH_OR_TO_LITTLE_QUOTATION_MARKS_IN_STRING_DECLARATION);
@@ -1624,7 +1635,7 @@ namespace config
 						remove_trailing_whitespaces(pre_Values);
 						if (pre_Values.length() < arraySize)
 						{
-							lC.LogError((std::ostringstream() << "CONFIG-0011 Array is too big! Array Size is " << arraySize).str(), config_error::ARRAY_IS_TOO_BIG_OR_TOO_SMALL_TO_HOLD_STRING);
+							lC.LogError(std::ostringstream() << "CONFIG-0011 Array is too big! Array Size is " << arraySize, config_error::ARRAY_IS_TOO_BIG_OR_TOO_SMALL_TO_HOLD_STRING);
 							continue;
 						}
 						else if (pre_Values.length() > arraySize)
@@ -1667,7 +1678,7 @@ namespace config
 						// ---------------------------
 						{
 							char ch = ',';
-							auto count = std::ranges::count(arr_Values.begin(), arr_Values.end(), ch) + 1;
+							auto count = std::count(arr_Values.begin(), arr_Values.end(), ch) + 1;
 							// No more credit
 							if (count > arraySize)
 							{
@@ -1716,7 +1727,7 @@ namespace config
 								else
 								{
 									lC.LogError(
-										(std::stringstream() << "CONFIG-0008 " << num << " is not a integer!").str(),
+										std::ostringstream() << "CONFIG-0008 " << num << " is not a integer!",
 										config_error::MIS_MATCHED_TYPES_IN_ARRAY);
 									FreeArrayByType("int");
 									break;
@@ -1747,7 +1758,7 @@ namespace config
 								else
 								{
 									lC.LogError(
-										(std::stringstream() << "CONFIG-0008 " << num << " is not a decimal number!").str(),
+										std::ostringstream() << "CONFIG-0008 " << num << " is not a decimal number!",
 										config_error::MIS_MATCHED_TYPES_IN_ARRAY);
 									FreeArrayByType("double");
 									break;
@@ -1837,7 +1848,7 @@ namespace config
 								std::istringstream iss{ num };
 								iss >> std::hex >> temp;
 								arr_Values.erase((size_t)arr_Values.find(num), (size_t)num.length() + 1);
-								std::ranges::replace(num.begin(), num.end(), 'X', 'x');
+								std::replace(num.begin(), num.end(), 'X', 'x');
 								if (isHexNumber(num))
 								{
 									data[element].hex_array_Out.push_back(temp);
@@ -1846,7 +1857,7 @@ namespace config
 								else
 								{
 									lC.LogError(
-										(std::stringstream() << "CONFIG-0008 " << num << " is not a hexadecimal number!").str(),
+										std::ostringstream() << "CONFIG-0008 " << num << " is not a hexadecimal number!",
 										config_error::MIS_MATCHED_TYPES_IN_ARRAY);
 									FreeArrayByType("hex_number");
 									break;
@@ -1871,70 +1882,97 @@ namespace config
 						}
 						continue;
 					}
-					else if (values.find('(') != std::string::npos && function_map.contains(values.substr(0, values.find('('))) && isExperimental && isLanguage)
+					else if 
+					(values.find('(') != std::string::npos
+					&& (function_map.contains(values.substr(0, values.find('('))) || function_map.contains(pre_Values.substr(0, pre_Values.find('('))))
+					&& isLanguage)
 					{
-						std::string function_name = values.substr(0, values.find('('));
-						std::string par = values.substr(values.find('(') + 1, values.find(')') - 1);
-						std::erase(par, ')');
-						std::vector<std::string> pars;
-						Function func;
-						try
-						{
+						 std::string function_name = values.substr(0, values.find('('));
+						 if (function_name.find('=') != std::string::npos)
+						 {
+							 function_name = function_name.substr(function_name.find('=') + 2, function_name.find('('));
+						 }
+						 std::string par = values.substr(values.find('(') + 1, values.find(')') - 1);
+						 std::erase(par, ')');
+						 std::vector<std::string> pars;
+						 Function func;
+						 try
+						 {
 							func = function_map.at(function_name);
-						} 
-						catch(std::out_of_range) 
+						 } 
+						 catch(std::out_of_range) 
 						{
 							lC.LogError("CONFIG-0010 Could not find function in function map", config_error::COULD_NOT_FIND_IN_DATA_MAP);
 							continue;
 						}
-						bool errorState = false;
-						auto count = std::count(par.begin(), par.end(), ',') + 1;
-						if (count > func.numberOfParameters && func.numberOfParameters != 0)
+						 bool errorState = false;
+						 auto count = std::count(par.begin(), par.end(), ',') + 1;
+						 if (count > func.numberOfParameters && func.numberOfParameters != 0)
 						{
 							lC.LogError("CONFIG-0020 Too many parameters in function call!", config_error::TOO_MANY_OR_TO_FEW_PARAMETERS_IN_FUNCTION_CALL, false);
 							errorState = true;
 							continue;
 						}
-						else if (count < func.numberOfParameters)
+						 else if (count < func.numberOfParameters)
 						{
 							lC.LogError("CONFIG-0020 Too few parameters in function call!", config_error::TOO_MANY_OR_TO_FEW_PARAMETERS_IN_FUNCTION_CALL, false);
 							errorState = true;
 							continue;
 						}
-						for (int i = 0; i < func.numberOfParameters; i++)
-						{
-							if (func.numberOfParameters == 1)
+						 for (int i = 0; i < func.numberOfParameters; i++)
+						 {
+						 	if (func.numberOfParameters == 1)
 							{
 								pars.push_back(par);
 							}
-							else
-							{
-								std::string thisPar = par.substr(i != func.numberOfParameters - 1 ? i : i - 1, par.find(','));
-								par.erase(par.find(thisPar), thisPar.length() + 1);
-								pars.push_back(thisPar);
-							}
-						}
-						if (errorState) continue;
-						bool willTerminate{};
-						bool errState{};
-						Store st{};
-						RunFunction(func, pars, willTerminate, errState, st);
-						if (willTerminate)
+						 	else
+						 	{
+						 		std::string thisPar = par.substr(i != func.numberOfParameters - 1 ? i : static_cast<std::basic_string<char, std::char_traits<char>, std::allocator<char>>::size_type>(i) - 1, par.find(','));
+						 		par.erase(par.find(thisPar), thisPar.length() + 1);
+								remove_trailing_whitespaces(thisPar);
+						 		pars.push_back(thisPar);
+						 	}
+						 }
+						 if (errorState) continue;
+						 bool willTerminate{};
+						 bool errState{};
+						 Store st{};
+						 RunFunction(func, pars, willTerminate, errState, st);
+						 if (willTerminate)
 						{
 							int lnTerm = 1;
 							for (auto& i : func.actions)
 							{
 								lnTerm++;
 								const char* ln = i.c_str();
+#ifdef WINDOWS
 								if (_stricmp(ln, "TERMINATE_PARSER") == 0) break;
+#else
+								if (strcasecmp(ln, "TERMINATE_PARSER") == 0) break;
+#endif
 								else continue;
 							}
 							lC.LogError(std::ostringstream() << "CONFIG-0016 TERMINATE_PARSER was called at line " << lnTerm + func.startLine << " in function " << func.func_name << " called from function " << scope << '\n', config_error::TERMINATE_PARSER_WAS_CALLED, true);
+#ifdef WINDOWS
 							__debugbreak();
+#else
+							std::raise(SIGINT);
+#endif
 							return false;
 						}
-						if (errState) continue;
-						continue;
+						 if (values.find('=') != std::string::npos)
+						 {
+							 data.push_back(st);
+							 std::erase(var_name, 32);
+							 data_map.try_emplace(var_name, st);
+							 element = data.size() - 1;
+							 data[element].var_name = var_name;
+							 data_map[var_name].var_name = var_name;
+							 data[element].scope = scope;
+							 data_map[var_name].scope = scope;
+							 SetType(type);
+						 }
+						 if (errState) continue;
 					}
 					else if (!isNumber(pre_Values) && pre_Values.find("print") != std::string::npos && pre_Values != "printnl" && pre_Values != "println" && isLanguage )
 					{
@@ -1960,21 +1998,25 @@ namespace config
 							std::stringstream iss{};
 							iss << i;
 							str = iss.str();
-							std::ranges::reverse(str.begin(), str.end());
+							std::reverse(str.begin(), str.end());
 							str.erase(str.find('='), std::string::npos);
-							std::ranges::reverse(str.begin(), str.end());
+							std::reverse(str.begin(), str.end());
 							remove_trailing_whitespaces(str);
 							if (str == "\\n") str = "\n";
-							printf_s(str.c_str());
+							if (i.type == types::basic_string)
+							{
+								std::erase(str, '\"');
+							}
+							printf("%s", str.c_str());
 						}
 						else
 						{
 							// Easter egg that's also kinda a troll
 							if (vname == "\"Your mom\"") vname = "\"Your mom is fat\"";
-							printf_s("%s", vname.substr(vname.find('\"') + 1, vname.rfind('\"') - 1).c_str());
+							printf("%s", vname.substr(vname.find('\"') + 1, vname.rfind('\"') - 1).c_str());
 						}
 					}
-					else if (!isNumber(pre_Values) && (pre_Values == "printnl" || pre_Values == "println") && isLanguage) printf_s("\n");
+					else if (!isNumber(pre_Values) && (pre_Values == "printnl" || pre_Values == "println") && isLanguage) printf("\n");
 					else if (!isNumber(pre_Values) && pre_Values.find("toString") != std::string::npos)
 					{
 					std::string num = pre_Values.substr(pre_Values.find('(') + 1, pre_Values.length());
@@ -2078,7 +2120,7 @@ namespace config
 						data_map[var_name].type = types::basic_boolean;
 						data_map[var_name].boolean_Out = false;
 					}
-					else if (isHexNumber(pre_Values))
+					else if (isHexNumber(pre_Values) || usesArthmetricOperators(pre_Values, "hex_number"))
 					{
 						if (type != "hex_number")
 						{
@@ -2111,7 +2153,7 @@ namespace config
 							continue;
 						}
 					}
-					else if (isNumber(pre_Values))
+					else if (isNumber(pre_Values) || usesArthmetricOperators(pre_Values, "int"))
 					{
 						if (type != "int")
 						{
@@ -2141,7 +2183,7 @@ namespace config
 							continue;
 						}
 					}
-					else if (isDecimalNumber(pre_Values))
+					else if (isDecimalNumber(pre_Values) || usesArthmetricOperators(pre_Values, "double"))
 					{
 						if (type == "int") 
 						{ 
@@ -2255,12 +2297,12 @@ namespace config
 		}
 	public:
 		const std::vector<config_error>& GetErrorList() const { return error_list; }
-		const config_error& GetLastError() { return error_list.at(err_element); }
+		const config_error& GetLastError() { return error_list.at((size_t)err_element - 1); }
 		const std::vector<Store>& GetDataVector() const { return data; }
 		const std::unordered_map<std::string, Store>& GetDataMap() const { return data_map; }
-		Config() = delete;
-		Config(std::istream& inStream, const std::string& scope = "main", types function_type = types::basic_int)
-			:isFunction{ scope != "main" }, throwExceptionOnError(false)
+		Config() = default;
+		Config(std::istream& inStream, bool throwExceptionOnError, const std::string& scope = "main", types function_type = types::basic_int)
+			:isFunction{ scope != "main" }, throwExceptionOnError{ throwExceptionOnError }
 		{
 			//ASSERT(inStream.rdbuf() == std::cin.rdbuf(), "\a[FATAL_ERROR] CONFIG-0021 inStream.rdbuf() == std::cin.rdbuf()",
 			//error_list.push_back(config_error::ISTREAM_OBJECT_IS_CIN); 
@@ -2286,7 +2328,19 @@ namespace config
 			}
 			data.clear();
 			data_map.clear();
+			throwExceptionOnError = throwExceptionOnError;
 			return Parse(is, false, "main", types::basic_int);
+		}
+		void AddToConfigurationFile(std::ostream& os, std::vector<Store> elements)
+		{
+			os << '\n' << std::flush;
+			for (auto& i : elements)
+			{
+				bool isStrOutEmpty = i.str_Out.empty() && i.type == types::basic_string;
+				os << Store::TypeToTypeName(i.type) << ' ';
+				if (isStrOutEmpty) os << "\"\";\n";
+				else os << i << ";\n" << std::flush;
+			}
 		}
 		Config(const Config&) = delete;
 		Config& operator=(const Config&) = delete;
@@ -2306,9 +2360,8 @@ namespace config
 		m_Other->good = false;
 		if (m_ThrowExceptionOnError)
 		{
-			config_exception cExc = { (const char*)calloc(msg.length() + 2, sizeof(char)), err, *m_Line, true };
-			memcpy((void*)cExc.what(), msg.c_str(), msg.length() + 2);
-			throw cExc;
+			::config::config_exception exeception{ msg };
+			throw exeception;
 		}
 		// Continue or return if fatal Statement has to be in the if statement along with this function
 	}
@@ -2324,4 +2377,13 @@ namespace config
 		LogError(msg, err, isFatal);
 		// Continue or return if fatal Statement has to be in the if statement along with this function
 	}
+#ifndef WINDOWS
+	inline void LogCover::LogError(const std::ostream& msg_ostream, config_error err, bool isFatal)
+	{
+		std::ostringstream oss;
+		oss << msg_ostream.rdbuf();
+		LogError(oss.str(), err, isFatal);
+		// Continue or return if fatal Statement has to be in the if statement along with this function
+	}
+#endif
 }

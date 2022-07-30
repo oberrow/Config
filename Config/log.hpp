@@ -5,6 +5,9 @@
 #ifdef _WIN32
 #define WINDOWS 1
 #include <Windows.h>
+#define CDECL __cdecl
+#else
+#define CDECL
 #endif
 
 namespace config
@@ -18,11 +21,11 @@ namespace config
 		static const int levelInfoId = 0;
 		static const int levelWarningId = 1;
 		static const int levelErrorId = 2;
-		void __cdecl LoglevelInfo(std::string const& message);
-		void __cdecl LoglevelWarn(std::string const& message);
-		void __cdecl LoglevelError(std::string const& message);
-		void __cdecl LoglevelFatalError(std::string const& message);
-		void __cdecl LogsetLevel(int level);
+		void CDECL LoglevelInfo(std::string const& message);
+		void CDECL LoglevelWarn(std::string const& message);
+		void CDECL LoglevelError(std::string const& message);
+		void CDECL LoglevelFatalError(std::string const& message);
+		void CDECL LogsetLevel(int level);
 		Log(int level)
 			:m_level{level} 
 		{

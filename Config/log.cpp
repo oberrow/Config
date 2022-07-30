@@ -1,7 +1,13 @@
 #include "log.hpp"
 
+#ifdef WINDOWS
+#define CDECL __cdecl
+#else
+#define CDECL
+#endif
+
 namespace config {
-	void __cdecl Log::LoglevelInfo(std::string const& message)
+	void CDECL Log::LoglevelInfo(std::string const& message)
 	{
 		std::cout << "\x1b[32m";
 		if (m_level <= 0)
@@ -10,7 +16,7 @@ namespace config {
 			return;
 		std::clog << "\x1b[39m";
 	}
-	void __cdecl Log::LoglevelWarn(std::string const& message)
+	void CDECL Log::LoglevelWarn(std::string const& message)
 	{
 		std::clog << "\x1b[33m";
 		if (m_level <= 1)
@@ -19,7 +25,7 @@ namespace config {
 			return;
 		std::clog << "\x1b[39m";
 	}
-	void __cdecl Log::LoglevelError(std::string const& message)
+	void CDECL Log::LoglevelError(std::string const& message)
 	{
 		std::cerr << "\x1b[31m" << "\x1b[1m";
 		if (m_level <= 2)
@@ -28,7 +34,7 @@ namespace config {
 			return;
 		std::cerr << "\x1b[39m";
 	}
-	void __cdecl Log::LoglevelFatalError(std::string const& message)
+	void CDECL Log::LoglevelFatalError(std::string const& message)
 	{
 		std::cerr << "\x1b[31m";
 		if (m_level <= 2)
@@ -37,7 +43,7 @@ namespace config {
 			return;
 		std::cerr << "\x1b[39m";
 	}
-	void __cdecl Log::LogsetLevel(int level)
+	void CDECL Log::LogsetLevel(int level)
 	{
 		m_level = level;
 	}
