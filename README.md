@@ -32,6 +32,8 @@ Array syntax:
 array<type, size> (array name) = { (different values of the same type sepperated by commas and the number of declarations must be equal to the array size) }
 
 Example:
+Use ';' to have multiple statements on 1 line
+
 array<int, 10> intArray = { 0, 1, 2, 3, 4, 5, 6, 7, 8 ,9 }
 
 
