@@ -5,9 +5,9 @@ Was coded using the msvc compiler in c++20
 2. Link against that in the project you want to use (you need to do this differently for different compilers but it might not work on other compilers)
 3. Include the Config.hpp file in your project where ever you want to use it (for me it was #include "../Config/Config.hpp" as shown in the example usage)
 4. In the file you included it in make a new std::ifstream object and open a file with the std::ifstream object
-5. Make a new Config object by doing Config::Config (var name){(std::ifstream object or any other class with std::istream as a base class)};
+5. Make a new Config object by doing Config::Config (var name){(std::ifstream object or any other class with std::istream as a base class), (will it throw an exception when an error occurs)};
 6. Do auto values = (config object).GetDataMap() or auto values = (config object).GetDataVector()
-7. To Reload the Configuration file do if(bool result = (config object).ReloadConfigFile(); result == false) { /\*Error handling or return 1; in the main function\*/ return 1; }
+7. To Reload the Configuration file do if(bool result = (config object).ReloadConfigFile((std::ifstream object or any other class with std::istream as a base class), (will it throw an exception when an error occurs); result == false) { /\*Error handling or return 1; in the main function\*/ return 1; }
 ## Config file syntax
 (type) (var_name (used for data map)) = (value)
 Example:
